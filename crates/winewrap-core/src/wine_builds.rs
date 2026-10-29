@@ -1,10 +1,11 @@
 //! Installing Wine without Homebrew.
 //!
 //! Downloads a prebuilt macOS Wine from [Gcenx/macOS_Wine_builds] (the same
-//! builds Homebrew's `wine-stable` cask installs) and unpacks it into
-//! WineWrap's managed runtimes directory, where [`crate::runtime::discover`]
-//! picks it up. Files WineWrap downloads itself are not quarantined by macOS,
-//! so the runtime works without clearing Gatekeeper flags.
+//! builds Homebrew's `wine-stable` cask installs), or WineWrap's own build
+//! for Steam, and unpacks it into WineWrap's managed runtimes directory,
+//! where [`crate::runtime::discover`] picks it up. Files WineWrap downloads
+//! itself are not quarantined by macOS, so the runtime works without clearing
+//! Gatekeeper flags.
 //!
 //! [Gcenx/macOS_Wine_builds]: https://github.com/Gcenx/macOS_Wine_builds
 
@@ -25,6 +26,12 @@ pub const BUILDS_URL: &str = "https://github.com/Gcenx/macOS_Wine_builds/release
 const RELEASES_API: &str =
     "https://api.github.com/repos/Gcenx/macOS_Wine_builds/releases?per_page=30";
 
+/// WineWrap's own build, made by `scripts/build-wine-macos.sh` and published
+/// as a release of this repository (with its source, as the LGPL requires).
+const WINEWRAP_BUILD_VERSION: &str = "26.3.0";
+const WINEWRAP_BUILD_SIZE: u64 = 212_697_632;
+const WINEWRAP_RELEASES: &str = "https://github.com/Hashspace-apps/wine-wrap/releases/download";
+
 /// Which Wine release line to install.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum WineFlavor {
@@ -35,16 +42,22 @@ pub enum WineFlavor {
     Devel,
     /// Development release plus the wine-staging patch set.
     Staging,
+    /// WineWrap's own build: CodeWeavers' LGPL CrossOver source plus
+    /// WineWrap's patches. Needed for Steam, whose window stays black with
+    /// the other builds.
+    WineWrap,
 }
 
 impl WineFlavor {
-    pub const ALL: &'static [WineFlavor] = &[Self::Stable, Self::Devel, Self::Staging];
+    pub const ALL: &'static [WineFlavor] =
+        &[Self::Stable, Self::Devel, Self::Staging, Self::WineWrap];
 
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::Stable => "stable",
             Self::Devel => "devel",
             Self::Staging => "staging",
+            Self::WineWrap => "winewrap",
         }
     }
 }
@@ -63,7 +76,7 @@ impl FromStr for WineFlavor {
             .iter()
             .copied()
             .find(|f| f.as_str().eq_ignore_ascii_case(s))
-            .ok_or_else(|| "expected one of: stable, devel, staging".to_string())
+            .ok_or_else(|| "expected one of: stable, devel, staging, winewrap".to_string())
     }
 }
 
@@ -139,8 +152,25 @@ pub fn pick_build(releases_json: &str, flavor: WineFlavor) -> Result<WineBuild> 
         })
 }
 
-/// Ask GitHub for the newest build of `flavor`.
+/// WineWrap's own build, the one Steam bottles use.
+pub fn winewrap_build() -> WineBuild {
+    let version = WINEWRAP_BUILD_VERSION;
+    let asset_name = format!("wine-winewrap-{version}-osx64.tar.xz");
+    WineBuild {
+        flavor: WineFlavor::WineWrap,
+        version: version.to_string(),
+        url: format!("{WINEWRAP_RELEASES}/wine-winewrap-{version}/{asset_name}"),
+        asset_name,
+        size: WINEWRAP_BUILD_SIZE,
+    }
+}
+
+/// The newest build of `flavor`. Asks GitHub, except for WineWrap's own
+/// build, which this version of WineWrap pins.
 pub fn latest_build(flavor: WineFlavor) -> Result<WineBuild> {
+    if flavor == WineFlavor::WineWrap {
+        return Ok(winewrap_build());
+    }
     let fail = |message: String| Error::Download {
         url: RELEASES_API.into(),
         message,
@@ -272,7 +302,20 @@ mod tests {
     #[test]
     fn flavors_parse() {
         assert_eq!("Staging".parse::<WineFlavor>(), Ok(WineFlavor::Staging));
+        assert_eq!("winewrap".parse::<WineFlavor>(), Ok(WineFlavor::WineWrap));
         assert!("beta".parse::<WineFlavor>().is_err());
+    }
+
+    #[test]
+    fn winewrap_build_is_pinned() {
+        let build = latest_build(WineFlavor::WineWrap).unwrap();
+        assert_eq!(build, winewrap_build());
+        assert_eq!(build.runtime_name(), "wine-winewrap-26.3.0");
+        assert_eq!(
+            build.url,
+            "https://github.com/Hashspace-apps/wine-wrap/releases/download/\
+             wine-winewrap-26.3.0/wine-winewrap-26.3.0-osx64.tar.xz"
+        );
     }
 
     /// Build a `.tar.xz` shaped like Gcenx's: `Wine Stable.app/Contents/Resources/wine/bin/…`.

@@ -8,6 +8,7 @@ use crate::paths::AppPaths;
 use crate::runtime::{self, RuntimeKind, WineRuntime};
 use crate::steam;
 use crate::system::{self, Check, Status};
+use crate::wine_builds::{self, InstallProgress};
 
 /// Entry point to the library: owns the paths and global configuration and
 /// ties runtimes and bottles together. Front ends hold one of these.
@@ -151,6 +152,28 @@ impl WineWrap {
 
     // ---- steam ----------------------------------------------------------
 
+    /// Point a Steam bottle's settings at WineWrap's own Wine build,
+    /// downloading it first if needed, when [`steam::needs_winewrap_runtime`]
+    /// says so. Returns whether `config` changed; the caller saves it.
+    ///
+    /// Does nothing off macOS, where that build doesn't run.
+    pub fn use_steam_runtime(
+        &self,
+        config: &mut BottleConfig,
+        progress: impl FnMut(InstallProgress),
+    ) -> Result<bool> {
+        if !cfg!(target_os = "macos") || !steam::needs_winewrap_runtime(config) {
+            return Ok(false);
+        }
+        let build = wine_builds::winewrap_build();
+        let name = build.runtime_name();
+        if self.runtime(&name).is_err() {
+            wine_builds::install(&self.paths, &build, progress)?;
+        }
+        config.runtime = Some(name);
+        Ok(true)
+    }
+
     /// Path of the cached Steam installer, downloading it if needed.
     pub fn steam_installer(&self, progress: impl FnMut(u64, Option<u64>)) -> Result<PathBuf> {
         let dest = self.paths.downloads_dir().join(steam::STEAM_SETUP_FILE);
@@ -224,6 +247,32 @@ mod tests {
             ww.bottle("../x"),
             Err(Error::InvalidBottleName(_))
         ));
+    }
+
+    #[test]
+    fn steam_bottles_use_the_installed_winewrap_build() {
+        let (ww, _d) = setup();
+        let name = wine_builds::winewrap_build().runtime_name();
+        // Already installed, so nothing is downloaded.
+        crate::runtime::tests::fake_runtime(&ww.paths.runtimes_dir().join(&name), "wine");
+
+        let mut cfg = BottleConfig::new("Steam");
+        cfg.runtime = Some("wine-stable-11.0".into());
+        let changed = ww.use_steam_runtime(&mut cfg, |_| {}).unwrap();
+        if cfg!(target_os = "macos") {
+            assert!(changed);
+            assert_eq!(cfg.runtime.as_deref(), Some(name.as_str()));
+            // Already moved: nothing more to do.
+            assert!(!ww.use_steam_runtime(&mut cfg, |_| {}).unwrap());
+        } else {
+            assert!(!changed);
+            assert_eq!(cfg.runtime.as_deref(), Some("wine-stable-11.0"));
+        }
+
+        let mut custom = BottleConfig::new("Steam");
+        custom.runtime = Some("gptk".into());
+        assert!(!ww.use_steam_runtime(&mut custom, |_| {}).unwrap());
+        assert_eq!(custom.runtime.as_deref(), Some("gptk"));
     }
 
     #[test]
