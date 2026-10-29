@@ -59,7 +59,8 @@ jobs:
           targets: aarch64-apple-darwin, x86_64-apple-darwin
 
       # Optional Developer ID signing + notarization. Without these secrets
-      # the app is ad-hoc signed and users must right-click → Open on first launch.
+      # the app is ad-hoc signed and users must clear Gatekeeper's quarantine
+      # flag on first launch (see README, "Running an unsigned build").
       - name: Import signing certificate
         id: signing
         env:

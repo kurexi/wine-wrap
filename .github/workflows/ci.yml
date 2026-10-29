@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
   workflow_dispatch:
   # Lets the release workflow run the same checks before publishing.
@@ -126,14 +126,43 @@ jobs:
           VERSION: 0.0.0-ci.${{ github.run_number }}
           BUILD_NUMBER: ${{ github.run_number }}
         run: scripts/package-macos.sh universal
-      - name: Verify the bundle runs
-        run: |
-          hdiutil attach dist/*.dmg -mountpoint /tmp/winewrap-dmg -nobrowse
-          /tmp/winewrap-dmg/WineWrap.app/Contents/MacOS/winewrap --version
-          hdiutil detach /tmp/winewrap-dmg
       - uses: actions/upload-artifact@v4
         with:
-          name: winewrap-macos-${{ github.sha }}
+          name: winewrap-macos-unsigned
           path: dist/*
           if-no-files-found: error
           retention-days: 14
+      - name: Smoke-test the packaged app
+        env:
+          WINEWRAP_HOME: ${{ runner.temp }}/winewrap-home
+        run: |
+          hdiutil attach dist/*.dmg -mountpoint /tmp/winewrap-dmg -nobrowse
+          cp -R /tmp/winewrap-dmg/WineWrap.app "$RUNNER_TEMP/"
+          hdiutil detach /tmp/winewrap-dmg
+          app="$RUNNER_TEMP/WineWrap.app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          lipo -archs "$app/Contents/MacOS/WineWrap"
+          "$app/Contents/MacOS/winewrap" --version
+          "$app/Contents/MacOS/winewrap" bottle list
+
+          # Launch the GUI and make sure it stays up and draws a window.
+          "$app/Contents/MacOS/WineWrap" > "$RUNNER_TEMP/gui.log" 2>&1 &
+          pid=$!
+          sleep 20
+          screencapture -x "$RUNNER_TEMP/screenshot.png" || echo "screencapture unavailable"
+          if ! kill -0 "$pid" 2>/dev/null; then
+            echo "::error::WineWrap exited during startup"
+            cat "$RUNNER_TEMP/gui.log"
+            exit 1
+          fi
+          kill "$pid"
+          cat "$RUNNER_TEMP/gui.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gui-smoke-test
+          path: |
+            ${{ runner.temp }}/screenshot.png
+            ${{ runner.temp }}/gui.log
+          if-no-files-found: ignore
+          retention-days: 7
