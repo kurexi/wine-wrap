@@ -1,0 +1,19 @@
+[package]
+name = "winewrap-core"
+description = "Core library for WineWrap: Wine runtime discovery, bottle management and Steam integration"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde.workspace = true
+toml.workspace = true
+thiserror.workspace = true
+directories.workspace = true
+ureq.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

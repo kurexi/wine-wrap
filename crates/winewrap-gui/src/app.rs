@@ -1,0 +1,665 @@
+use std::path::{Path, PathBuf};
+
+use eframe::egui;
+use winewrap_core::steam::{self, SteamGame};
+use winewrap_core::{
+    Bottle, BottleConfig, GraphicsBackend, LaunchSpec, SyncMode, WindowsVersion, WineRuntime,
+    WineWrap,
+};
+
+use crate::jobs::{Event, Jobs, Reporter};
+
+const MAX_LOG_LINES: usize = 200;
+
+pub struct WineWrapApp {
+    ww: Option<WineWrap>,
+    bottles: Vec<Bottle>,
+    runtimes: Vec<WineRuntime>,
+    selected: Option<String>,
+    /// Editable copy of the selected bottle's settings.
+    draft: Option<BottleConfig>,
+    games: Vec<SteamGame>,
+    new_bottle: Option<NewBottle>,
+    confirm_delete: bool,
+    jobs: Jobs,
+    progress: Option<Option<f32>>,
+    log: Vec<String>,
+}
+
+/// State of the "New bottle" dialog.
+struct NewBottle {
+    config: BottleConfig,
+    install_steam: bool,
+}
+
+impl WineWrapApp {
+    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+        let mut app = Self {
+            ww: None,
+            bottles: Vec::new(),
+            runtimes: Vec::new(),
+            selected: None,
+            draft: None,
+            games: Vec::new(),
+            new_bottle: None,
+            confirm_delete: false,
+            jobs: Jobs::new(),
+            progress: None,
+            log: Vec::new(),
+        };
+        match WineWrap::open() {
+            Ok(ww) => app.ww = Some(ww),
+            Err(e) => app.push_log(format!("Failed to open data directory: {e}")),
+        }
+        app.reload();
+        if app.runtimes.is_empty() {
+            app.push_log("No Wine runtime found. Install one, e.g. `brew install --cask --no-quarantine gcenx/wine/wine-crossover`, then restart.");
+        }
+        app.selected = app.bottles.first().map(|b| b.name().to_string());
+        app.select_changed();
+        app
+    }
+
+    fn push_log(&mut self, line: impl Into<String>) {
+        let line = line.into();
+        tracing::info!("{line}");
+        self.log.push(line);
+        if self.log.len() > MAX_LOG_LINES {
+            self.log.drain(..self.log.len() - MAX_LOG_LINES);
+        }
+    }
+
+    /// Re-read bottles and runtimes from disk.
+    fn reload(&mut self) {
+        let Some(ww) = &self.ww else { return };
+        self.runtimes = ww.runtimes();
+        match ww.bottles() {
+            Ok(b) => self.bottles = b,
+            Err(e) => self.push_log(format!("Failed to list bottles: {e}")),
+        }
+        if let Some(sel) = &self.selected {
+            if !self.bottles.iter().any(|b| b.name() == sel) {
+                self.selected = None;
+            }
+        }
+        self.select_changed();
+    }
+
+    fn select_changed(&mut self) {
+        let bottle = self.selected_bottle().cloned();
+        self.draft = bottle.as_ref().map(|b| b.config.clone());
+        self.games = bottle
+            .as_ref()
+            .map(steam::installed_games)
+            .unwrap_or_default();
+        self.confirm_delete = false;
+    }
+
+    fn selected_bottle(&self) -> Option<&Bottle> {
+        let sel = self.selected.as_ref()?;
+        self.bottles.iter().find(|b| b.name() == sel)
+    }
+
+    fn handle_events(&mut self) {
+        for event in self.jobs.poll() {
+            match event {
+                Event::Log(line) => self.push_log(line),
+                Event::Progress(p) => self.progress = Some(p),
+                Event::Finished { label, error } => {
+                    self.progress = None;
+                    match error {
+                        None => self.push_log(format!("✔ {label}")),
+                        Some(e) => self.push_log(format!("✘ {label}: {e}")),
+                    }
+                    self.reload();
+                }
+            }
+        }
+    }
+
+    // ---- actions --------------------------------------------------------
+
+    /// Start a process in the background, logging its output to a file.
+    fn spawn(&mut self, spec: LaunchSpec, label: &str) {
+        let Some(ww) = &self.ww else { return };
+        match spec.spawn_logged(&ww.paths.logs_dir(), label) {
+            Ok((child, log)) => self.push_log(format!(
+                "Started {label} (pid {}), log: {}",
+                child.id(),
+                log.display()
+            )),
+            Err(e) => self.push_log(format!("Failed to start {label}: {e}")),
+        }
+    }
+
+    fn with_runtime(&mut self, bottle: &Bottle) -> Option<WineRuntime> {
+        let ww = self.ww.as_ref()?;
+        match ww.runtime_for(bottle) {
+            Ok(rt) => Some(rt),
+            Err(e) => {
+                self.push_log(format!("{}: {e}", bottle.name()));
+                None
+            }
+        }
+    }
+
+    fn create_bottle(&mut self, ctx: &egui::Context, nb: NewBottle) {
+        let Some(ww) = self.ww.clone() else { return };
+        let name = nb.config.name.clone();
+        let rt = match &nb.config.runtime {
+            Some(r) => ww.runtime(r),
+            None => ww.default_runtime(),
+        };
+        let rt = match rt {
+            Ok(rt) => rt,
+            Err(e) => return self.push_log(format!("Cannot create {name:?}: {e}")),
+        };
+        let bottle = match ww.create_bottle(nb.config) {
+            Ok(b) => b,
+            Err(e) => return self.push_log(format!("Cannot create {name:?}: {e}")),
+        };
+        self.selected = Some(name.clone());
+        self.reload();
+        let install_steam = nb.install_steam;
+        self.jobs
+            .spawn(ctx, format!("Create bottle {name:?}"), move |r| {
+                r.log(format!("Initialising {name:?} with {} …", rt.name));
+                let result = bottle
+                    .init_commands(&rt)
+                    .iter()
+                    .try_for_each(LaunchSpec::run);
+                if let Err(e) = result {
+                    let _ = ww.delete_bottle(&name);
+                    return Err(e);
+                }
+                if install_steam {
+                    install_steam_job(&ww, &bottle, &rt, r)?;
+                }
+                Ok(())
+            });
+    }
+
+    fn install_steam(&mut self, ctx: &egui::Context, bottle: Bottle) {
+        let Some(rt) = self.with_runtime(&bottle) else {
+            return;
+        };
+        let Some(ww) = self.ww.clone() else { return };
+        self.jobs.spawn(
+            ctx,
+            format!("Install Steam in {:?}", bottle.name()),
+            move |r| install_steam_job(&ww, &bottle, &rt, r),
+        );
+    }
+
+    fn save_settings(&mut self, ctx: &egui::Context) {
+        let (Some(bottle), Some(draft)) = (self.selected_bottle().cloned(), self.draft.clone())
+        else {
+            return;
+        };
+        let registry_changed = bottle.config.windows_version != draft.windows_version
+            || bottle.config.retina != draft.retina;
+        let bottle = Bottle {
+            path: bottle.path,
+            config: draft,
+        };
+        if let Err(e) = bottle.save() {
+            return self.push_log(format!("Failed to save settings: {e}"));
+        }
+        self.push_log(format!("Saved settings for {:?}", bottle.name()));
+        if registry_changed && bottle.is_initialized() {
+            if let Some(rt) = self.with_runtime(&bottle) {
+                self.jobs.spawn(
+                    ctx,
+                    format!("Apply settings to {:?}", bottle.name()),
+                    move |_| {
+                        bottle
+                            .apply_commands(&rt)
+                            .iter()
+                            .try_for_each(LaunchSpec::run)
+                    },
+                );
+            }
+        }
+        self.reload();
+    }
+
+    fn run_program(&mut self, bottle: &Bottle) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Run Windows program")
+            .add_filter("Windows programs", &["exe", "msi", "bat"])
+            .pick_file()
+        else {
+            return;
+        };
+        let Some(rt) = self.with_runtime(bottle) else {
+            return;
+        };
+        let is_msi = path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("msi"));
+        let mut spec = LaunchSpec::wine(bottle, &rt);
+        spec = if is_msi {
+            spec.args(["msiexec", "/i"]).arg(&path)
+        } else {
+            spec.arg(&path)
+        };
+        if let Some(dir) = path.parent() {
+            spec = spec.cwd(dir);
+        }
+        let label = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        self.spawn(spec, &format!("{}-{label}", bottle.name()));
+    }
+
+    // ---- UI -------------------------------------------------------------
+
+    fn sidebar(&mut self, ui: &mut egui::Ui) {
+        ui.add_space(6.0);
+        ui.heading("Bottles");
+        ui.add_space(4.0);
+        let mut clicked = None;
+        egui::ScrollArea::vertical()
+            .auto_shrink([false, true])
+            .max_height(ui.available_height() - 40.0)
+            .show(ui, |ui| {
+                for b in &self.bottles {
+                    let selected = self.selected.as_deref() == Some(b.name());
+                    let label = if steam::is_installed(b) {
+                        format!("🎮 {}", b.name())
+                    } else {
+                        format!("🍷 {}", b.name())
+                    };
+                    if ui.selectable_label(selected, label).clicked() {
+                        clicked = Some(b.name().to_string());
+                    }
+                }
+                if self.bottles.is_empty() {
+                    ui.weak("No bottles yet.");
+                }
+            });
+        if let Some(name) = clicked {
+            self.selected = Some(name);
+            self.select_changed();
+        }
+        ui.separator();
+        ui.horizontal(|ui| {
+            if ui.button("➕ New bottle").clicked() {
+                self.new_bottle = Some(NewBottle {
+                    config: BottleConfig::new("Steam"),
+                    install_steam: true,
+                });
+            }
+            if ui.button("⟳").on_hover_text("Reload").clicked() {
+                self.reload();
+            }
+        });
+    }
+
+    fn bottle_view(&mut self, ui: &mut egui::Ui) {
+        let Some(bottle) = self.selected_bottle().cloned() else {
+            ui.vertical_centered(|ui| {
+                ui.add_space(ui.available_height() / 3.0);
+                ui.heading("Welcome to WineWrap");
+                ui.label("Create a bottle to install Steam and play your Windows games.");
+                ui.add_space(8.0);
+                if ui.button("Create a Steam bottle").clicked() {
+                    self.new_bottle = Some(NewBottle {
+                        config: BottleConfig::new("Steam"),
+                        install_steam: true,
+                    });
+                }
+            });
+            return;
+        };
+        let ctx = ui.ctx().clone();
+        let busy = self.jobs.is_busy();
+        let has_steam = steam::is_installed(&bottle);
+
+        ui.horizontal(|ui| {
+            ui.heading(bottle.name());
+            ui.weak(bottle.path.display().to_string());
+        });
+        ui.add_space(4.0);
+
+        ui.horizontal_wrapped(|ui| {
+            if has_steam {
+                if ui.button("▶ Launch Steam").clicked() {
+                    if let Some(rt) = self.with_runtime(&bottle) {
+                        self.spawn(
+                            steam::launch_command(&bottle, &rt),
+                            &format!("{}-steam", bottle.name()),
+                        );
+                    }
+                }
+            } else if ui
+                .add_enabled(!busy, egui::Button::new("⬇ Install Steam"))
+                .clicked()
+            {
+                self.install_steam(&ctx, bottle.clone());
+            }
+            if ui.button("Run program…").clicked() {
+                self.run_program(&bottle);
+            }
+            if ui.button("Wine settings").clicked() {
+                if let Some(rt) = self.with_runtime(&bottle) {
+                    self.spawn(
+                        LaunchSpec::wine(&bottle, &rt).arg("winecfg"),
+                        &format!("{}-winecfg", bottle.name()),
+                    );
+                }
+            }
+            if ui.button("Open C: drive").clicked() {
+                open_in_file_manager(&bottle.drive_c());
+            }
+            if ui
+                .button("⏹ Stop all")
+                .on_hover_text("Quit every program in this bottle")
+                .clicked()
+            {
+                if let Some(rt) = self.with_runtime(&bottle) {
+                    let spec = bottle.kill_command(&rt);
+                    if let Err(e) = spec.run() {
+                        self.push_log(e.to_string());
+                    }
+                }
+            }
+        });
+        ui.separator();
+
+        egui::ScrollArea::vertical().show(ui, |ui| {
+            if has_steam {
+                egui::CollapsingHeader::new(format!("Games ({})", self.games.len()))
+                    .default_open(true)
+                    .show(ui, |ui| self.games(ui, &bottle));
+            }
+            egui::CollapsingHeader::new("Settings")
+                .default_open(!has_steam)
+                .show(ui, |ui| self.settings(ui, &bottle));
+        });
+    }
+
+    fn games(&mut self, ui: &mut egui::Ui, bottle: &Bottle) {
+        if self.games.is_empty() {
+            ui.weak("No games installed yet. Launch Steam and install some.");
+        }
+        let mut play = None;
+        egui::Grid::new("games")
+            .striped(true)
+            .num_columns(3)
+            .show(ui, |ui| {
+                for g in &self.games {
+                    ui.label(&g.name);
+                    if g.fully_installed {
+                        ui.weak(g.app_id.to_string());
+                    } else {
+                        ui.weak("update pending");
+                    }
+                    if ui.button("▶ Play").clicked() {
+                        play = Some(g.app_id);
+                    }
+                    ui.end_row();
+                }
+            });
+        if ui.small_button("Refresh").clicked() {
+            self.games = steam::installed_games(bottle);
+        }
+        if let Some(app_id) = play {
+            if let Some(rt) = self.with_runtime(bottle) {
+                self.spawn(
+                    steam::play_command(bottle, &rt, app_id),
+                    &format!("{}-{app_id}", bottle.name()),
+                );
+            }
+        }
+    }
+
+    fn settings(&mut self, ui: &mut egui::Ui, bottle: &Bottle) {
+        let runtimes = self.runtimes.clone();
+        let Some(draft) = self.draft.as_mut() else {
+            return;
+        };
+        settings_form(ui, draft, &runtimes);
+
+        ui.horizontal(|ui| {
+            ui.label("Steam arguments");
+            let mut args = draft.steam_args.join(" ");
+            if ui
+                .text_edit_singleline(&mut args)
+                .on_hover_text("e.g. -cef-disable-gpu if the Steam window stays blank")
+                .changed()
+            {
+                draft.steam_args = args.split_whitespace().map(str::to_string).collect();
+            }
+        });
+
+        ui.add_space(6.0);
+        let changed = Some(&bottle.config) != self.draft.as_ref();
+        ui.horizontal(|ui| {
+            if ui.add_enabled(changed, egui::Button::new("Save")).clicked() {
+                let ctx = ui.ctx().clone();
+                self.save_settings(&ctx);
+            }
+            if ui
+                .add_enabled(changed, egui::Button::new("Revert"))
+                .clicked()
+            {
+                self.draft = Some(bottle.config.clone());
+            }
+            ui.add_space(24.0);
+            if self.confirm_delete {
+                ui.colored_label(
+                    ui.visuals().warn_fg_color,
+                    "Delete this bottle and everything in it?",
+                );
+                if ui.button("Delete").clicked() {
+                    if let Some(ww) = &self.ww {
+                        let result = ww.delete_bottle(bottle.name());
+                        match result {
+                            Ok(()) => self.push_log(format!("Deleted {:?}", bottle.name())),
+                            Err(e) => self.push_log(format!("Delete failed: {e}")),
+                        }
+                    }
+                    self.selected = None;
+                    self.reload();
+                }
+                if ui.button("Cancel").clicked() {
+                    self.confirm_delete = false;
+                }
+            } else if ui.button("🗑 Delete bottle…").clicked() {
+                self.confirm_delete = true;
+            }
+        });
+    }
+
+    fn new_bottle_dialog(&mut self, ctx: &egui::Context) {
+        let Some(nb) = self.new_bottle.as_mut() else {
+            return;
+        };
+        let runtimes = self.runtimes.clone();
+        let mut create = false;
+        let mut cancel = false;
+        let name_ok = winewrap_core::bottle::validate_name(&nb.config.name).is_ok()
+            && !self.bottles.iter().any(|b| b.name() == nb.config.name);
+
+        let modal = egui::Modal::new(egui::Id::unique("new_bottle")).show(ctx, |ui| {
+            ui.set_width(380.0);
+            ui.heading("New bottle");
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                ui.label("Name");
+                ui.text_edit_singleline(&mut nb.config.name);
+            });
+            if !name_ok {
+                ui.colored_label(
+                    ui.visuals().warn_fg_color,
+                    "Choose a unique name (letters, digits, spaces, - _ .)",
+                );
+            }
+            settings_form(ui, &mut nb.config, &runtimes);
+            ui.checkbox(&mut nb.install_steam, "Install Steam");
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                if ui
+                    .add_enabled(name_ok && !runtimes.is_empty(), egui::Button::new("Create"))
+                    .clicked()
+                {
+                    create = true;
+                }
+                if ui.button("Cancel").clicked() {
+                    cancel = true;
+                }
+            });
+        });
+        if cancel || modal.should_close() {
+            self.new_bottle = None;
+        } else if create {
+            if let Some(nb) = self.new_bottle.take() {
+                self.create_bottle(ctx, nb);
+            }
+        }
+    }
+
+    fn status_bar(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            if let Some(label) = self.jobs.running.first() {
+                ui.spinner();
+                ui.label(label);
+                if let Some(Some(p)) = self.progress {
+                    ui.add(
+                        egui::ProgressBar::new(p)
+                            .desired_width(160.0)
+                            .show_percentage(),
+                    );
+                }
+            } else {
+                ui.weak(format!("{} runtime(s) available", self.runtimes.len()));
+            }
+        });
+        egui::CollapsingHeader::new("Activity")
+            .id_salt("activity")
+            .show(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .max_height(140.0)
+                    .stick_to_bottom(true)
+                    .show(ui, |ui| {
+                        for line in &self.log {
+                            ui.monospace(line);
+                        }
+                    });
+            });
+    }
+}
+
+impl eframe::App for WineWrapApp {
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        self.handle_events();
+        let ctx = ui.ctx().clone();
+
+        egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
+        egui::Panel::left("bottles")
+            .resizable(true)
+            .default_size(200.0)
+            .show(ui, |ui| self.sidebar(ui));
+        egui::CentralPanel::default_margins().show(ui, |ui| self.bottle_view(ui));
+
+        self.new_bottle_dialog(&ctx);
+    }
+}
+
+/// Shared settings widgets for the new-bottle dialog and the settings panel.
+fn settings_form(ui: &mut egui::Ui, cfg: &mut BottleConfig, runtimes: &[WineRuntime]) {
+    egui::Grid::new(ui.next_auto_id())
+        .num_columns(2)
+        .spacing([12.0, 6.0])
+        .show(ui, |ui| {
+            ui.label("Wine runtime");
+            let current = cfg.runtime.clone().unwrap_or_else(|| "Automatic".into());
+            egui::ComboBox::from_id_salt("runtime")
+                .selected_text(current)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut cfg.runtime, None, "Automatic");
+                    for rt in runtimes {
+                        let label = if rt.has_d3dmetal() {
+                            format!("{} ({}, D3DMetal)", rt.name, rt.kind)
+                        } else {
+                            format!("{} ({})", rt.name, rt.kind)
+                        };
+                        ui.selectable_value(&mut cfg.runtime, Some(rt.name.clone()), label);
+                    }
+                });
+            ui.end_row();
+
+            ui.label("Windows version");
+            enum_combo(ui, "winver", &mut cfg.windows_version, WindowsVersion::ALL);
+            ui.end_row();
+
+            ui.label("Graphics");
+            enum_combo(ui, "graphics", &mut cfg.graphics, GraphicsBackend::ALL);
+            ui.end_row();
+
+            ui.label("Synchronisation");
+            enum_combo(ui, "sync", &mut cfg.sync, SyncMode::ALL);
+            ui.end_row();
+
+            ui.label("Options");
+            ui.vertical(|ui| {
+                ui.checkbox(&mut cfg.retina, "Retina mode");
+                ui.checkbox(&mut cfg.metal_hud, "Metal performance HUD");
+                ui.checkbox(&mut cfg.advertise_avx, "Advertise AVX to games (macOS 15+)");
+                if cfg.graphics == GraphicsBackend::Dxvk {
+                    ui.checkbox(&mut cfg.dxvk_async, "DXVK async shader compilation");
+                }
+            });
+            ui.end_row();
+        });
+}
+
+fn enum_combo<T>(ui: &mut egui::Ui, id: &str, value: &mut T, all: &[T])
+where
+    T: Copy + PartialEq + std::fmt::Display,
+{
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(value.to_string())
+        .show_ui(ui, |ui| {
+            for v in all {
+                ui.selectable_value(value, *v, v.to_string());
+            }
+        });
+}
+
+/// Download (if needed) and run the Steam installer.
+fn install_steam_job(
+    ww: &WineWrap,
+    bottle: &Bottle,
+    rt: &WineRuntime,
+    r: &Reporter,
+) -> winewrap_core::Result<()> {
+    r.log("Downloading Steam installer …");
+    let setup: PathBuf = ww.steam_installer(|done, total| {
+        r.progress(total.filter(|&t| t > 0).map(|t| done as f32 / t as f32));
+    })?;
+    r.progress(None);
+    r.log("Running Steam installer …");
+    steam::install_command(bottle, rt, &setup).run()?;
+    LaunchSpec::wineserver(bottle, rt).arg("--wait").run()?;
+    if !steam::is_installed(bottle) {
+        return Err(winewrap_core::Error::SteamNotInstalled(
+            bottle.name().to_string(),
+        ));
+    }
+    r.log("Steam installed. Click “Launch Steam” to sign in.");
+    Ok(())
+}
+
+fn open_in_file_manager(path: &Path) {
+    let opener = if cfg!(target_os = "macos") {
+        "open"
+    } else {
+        "xdg-open"
+    };
+    if let Err(e) = std::process::Command::new(opener).arg(path).spawn() {
+        tracing::warn!("could not open {}: {e}", path.display());
+    }
+}
