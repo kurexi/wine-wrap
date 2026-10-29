@@ -8,8 +8,10 @@ repository.workspace = true
 publish = false
 rust-version = "1.95"  # eframe 0.37 requires 1.95
 
+# Not "WineWrap": on case-insensitive macOS file systems that would be the
+# same file as the CLI's "winewrap" in target/. The .app renames it.
 [[bin]]
-name = "WineWrap"
+name = "winewrap-gui"
 path = "src/main.rs"
 
 [dependencies]

@@ -58,14 +58,16 @@ trap 'rm -rf "$stage"' EXIT
 mkdir -p "$dist" "$stage/bin"
 
 # Merge per-architecture binaries into one (a no-op copy for native builds).
-for bin in winewrap WineWrap; do
+# Binary names must differ by more than case: macOS file systems are
+# case-insensitive, so `winewrap` and `WineWrap` would be the same file.
+for bin in winewrap winewrap-gui; do
     inputs=()
     for target in "${targets[@]}"; do
         inputs+=("target/$target/release/$bin")
     done
     lipo -create "${inputs[@]}" -output "$stage/bin/$bin"
 done
-lipo -info "$stage/bin/WineWrap"
+lipo -info "$stage/bin/winewrap" "$stage/bin/winewrap-gui"
 
 identity="${MACOS_SIGNING_IDENTITY:--}"
 sign() {
@@ -78,14 +80,15 @@ sign() {
 
 echo "==> Assembling WineWrap.app"
 app="$stage/dmg/WineWrap.app"
-mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-cp "$stage/bin/WineWrap" "$app/Contents/MacOS/WineWrap"
-# Ship the CLI inside the app too, so users of the .dmg can symlink it.
-cp "$stage/bin/winewrap" "$app/Contents/MacOS/winewrap"
+mkdir -p "$app/Contents/MacOS" "$app/Contents/Helpers" "$app/Contents/Resources"
+cp "$stage/bin/winewrap-gui" "$app/Contents/MacOS/WineWrap"
+# Ship the CLI inside the app too, so users of the .dmg can symlink it. It
+# lives in Helpers/ because MacOS/winewrap would collide with MacOS/WineWrap.
+cp "$stage/bin/winewrap" "$app/Contents/Helpers/winewrap"
 sed -e "s/@VERSION@/$version/" -e "s/@BUILD@/$build_number/" \
     packaging/macos/Info.plist >"$app/Contents/Info.plist"
 plutil -lint "$app/Contents/Info.plist"
-sign "$app/Contents/MacOS/winewrap"
+sign "$app/Contents/Helpers/winewrap"
 sign "$app"
 codesign --verify --deep --strict "$app"
 

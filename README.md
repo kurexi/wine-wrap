@@ -37,7 +37,7 @@ launch your games.
 cargo build --release
 ```
 
-This produces `target/release/winewrap` (CLI) and `target/release/WineWrap` (GUI).
+This produces `target/release/winewrap` (CLI) and `target/release/winewrap-gui` (GUI).
 To build a double-clickable `WineWrap.app` in a `.dmg`, plus a CLI tarball,
 run this on a Mac. It writes to `dist/`:
 
@@ -50,10 +50,12 @@ scripts/package-macos.sh native     # current architecture only, faster
 ```
 
 Prebuilt downloads are attached to each
-[GitHub release](https://github.com/hashspace-apps/wine-wrap/releases). Every CI
-run also uploads a `winewrap-macos-unsigned` artifact (Actions → CI → a run → Artifacts).
-To publish a build as the rolling `dev-unsigned` pre-release instead, run the CI
-workflow manually (Actions → CI → Run workflow) with **publish_prerelease** ticked.
+[GitHub release](https://github.com/hashspace-apps/wine-wrap/releases). The latest
+build of `master` is always available as the
+[`dev-unsigned` pre-release](https://github.com/hashspace-apps/wine-wrap/releases/tag/dev-unsigned).
+To publish one from another branch, run the CI workflow manually (Actions → CI →
+Run workflow). Builds are shared as release files, not Actions artifacts, so they
+don't use the account's artifact storage.
 
 ### Running an unsigned build
 
@@ -62,7 +64,7 @@ macOS Gatekeeper blocks apps downloaded from the internet that Apple has not
 notarized. On macOS 15 and later, right-click → Open no longer bypasses this.
 After downloading:
 
-1. Unzip the artifact if it came from a CI run, then open `WineWrap-*.dmg` and
+1. Download `WineWrap-*.dmg` from the release, open it and
    drag **WineWrap** to **Applications**.
 2. Remove the quarantine flag once:
 
@@ -75,7 +77,7 @@ After downloading:
 3. Optional: put the bundled CLI on your `PATH`:
 
    ```bash
-   sudo ln -sf /Applications/WineWrap.app/Contents/MacOS/winewrap /usr/local/bin/winewrap
+   sudo ln -sf /Applications/WineWrap.app/Contents/Helpers/winewrap /usr/local/bin/winewrap
    ```
 
 For the standalone CLI tarball, run `xattr -d com.apple.quarantine ./winewrap` after extracting it.
@@ -171,8 +173,8 @@ GitHub Actions workflows live in `.github/workflows/`:
 
 | Workflow | Runs on | Does |
 |---|---|---|
-| `ci.yml` | every push to `master`, every pull request, manual runs | `cargo fmt --check`; clippy on macOS and Linux; tests on macOS arm64, macOS x86_64 and Linux; a minimum Rust version check (1.85 for core/CLI, 1.95 for the GUI); `cargo deny` (licenses, RustSec advisories, crate sources); then builds the universal `.dmg`, uploads it as the `winewrap-macos-unsigned` artifact, and launches the app on a Mac runner as a smoke test |
-| `release.yml` | pushing a `v*.*.*` tag | checks that the tag matches `Cargo.toml`, runs CI, builds the macOS `.dmg`, the macOS CLI tarball and a Linux CLI tarball, and publishes a GitHub release with `SHA256SUMS.txt` |
+| `ci.yml` | every push to `master`, every pull request, manual runs | `cargo fmt --check`; clippy on macOS and Linux; tests on macOS arm64, macOS x86_64 and Linux; a minimum Rust version check (1.85 for core/CLI, 1.95 for the GUI); `cargo deny` (licenses, RustSec advisories, crate sources); then builds the universal `.dmg`, launches it on a Mac runner as a smoke test, and (on `master` or manual runs) publishes it as the `dev-unsigned` pre-release |
+| `release.yml` | pushing a `v*.*.*` tag | checks that the tag matches `Cargo.toml`, runs CI, builds the macOS `.dmg`, the macOS CLI tarball and a Linux CLI tarball, uploads them to a draft GitHub release and publishes it with `SHA256SUMS.txt` |
 
 Dependabot (`.github/dependabot.yml`) opens weekly update PRs for crates and actions.
 

@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       publish_prerelease:
-        description: Also publish the unsigned build as the "dev-unsigned" GitHub pre-release
+        description: Publish the unsigned build as the "dev-unsigned" GitHub pre-release
         type: boolean
-        default: false
+        default: true
   # Lets the release workflow run the same checks before publishing.
   workflow_call:
     inputs:
@@ -122,7 +122,7 @@ jobs:
     if: ${{ !inputs.skip_package }}
     runs-on: macos-latest
     permissions:
-      # Only used by the opt-in pre-release step on manual runs.
+      # Needed to publish the dev-unsigned pre-release.
       contents: write
     steps:
       - uses: actions/checkout@v5
@@ -136,6 +136,7 @@ jobs:
           BUILD_NUMBER: ${{ github.run_number }}
         run: scripts/package-macos.sh universal
       - name: Smoke-test the packaged app
+        timeout-minutes: 10
         env:
           WINEWRAP_HOME: ${{ runner.temp }}/winewrap-home
         run: |
@@ -144,9 +145,19 @@ jobs:
           hdiutil detach /tmp/winewrap-dmg
           app="$RUNNER_TEMP/WineWrap.app"
           codesign --verify --deep --strict --verbose=2 "$app"
+          cli="$app/Contents/Helpers/winewrap"
           lipo -archs "$app/Contents/MacOS/WineWrap"
-          "$app/Contents/MacOS/winewrap" --version
-          "$app/Contents/MacOS/winewrap" bottle list
+          lipo -archs "$cli"
+          # perl's alarm stands in for `timeout`, which macOS lacks; a GUI
+          # binary in the CLI's place would otherwise hang here.
+          version="$(perl -e 'alarm 30; exec @ARGV' "$cli" --version)"
+          echo "$version"
+          [[ "$version" == winewrap* ]] || { echo "::error::bundled CLI is not winewrap"; exit 1; }
+          perl -e 'alarm 30; exec @ARGV' "$cli" bottle list
+
+          # The CLI tarball must contain the CLI too.
+          mkdir "$RUNNER_TEMP/cli" && tar -xzf dist/winewrap-*.tar.gz -C "$RUNNER_TEMP/cli"
+          perl -e 'alarm 30; exec @ARGV' "$RUNNER_TEMP"/cli/*/winewrap --version
 
           # Launch the GUI and make sure it stays up and opens a window.
           "$app/Contents/MacOS/WineWrap" > "$RUNNER_TEMP/gui.log" 2>&1 &
@@ -164,22 +175,23 @@ jobs:
           echo "--- GUI log ---"
           cat "$RUNNER_TEMP/gui.log"
           exit "$status"
-      - uses: actions/upload-artifact@v4
-        # Artifact storage can run out at the account level; the build has
-        # already been verified above, so don't fail the job over it.
-        continue-on-error: true
-        with:
-          name: winewrap-macos-unsigned
-          path: dist/*
-          if-no-files-found: error
-          retention-days: 14
+      # Builds are delivered as GitHub release files rather than Actions
+      # artifacts: release files don't count against the account's (small)
+      # artifact storage quota. Every push to master and every manual run
+      # replaces the rolling "dev-unsigned" pre-release.
       - name: Publish "dev-unsigned" pre-release
-        if: github.event_name == 'workflow_dispatch' && inputs.publish_prerelease
+        if: >-
+          (github.event_name == 'push' && github.ref == 'refs/heads/master') ||
+          (github.event_name == 'workflow_dispatch' && inputs.publish_prerelease)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           notes="Unsigned (ad-hoc signed) development build of ${GITHUB_SHA::7} from ${GITHUB_REF_NAME}.
-          See the README section \"Running an unsigned build\" before opening it."
+
+          Not notarized by Apple: after copying WineWrap.app to Applications, run
+          \`xattr -dr com.apple.quarantine /Applications/WineWrap.app\` once.
+          See the README section \"Running an unsigned build\"."
           gh release delete dev-unsigned --yes --cleanup-tag || true
           gh release create dev-unsigned dist/* --prerelease --target "$GITHUB_SHA" \
             --title "Development build (unsigned)" --notes "$notes"
+          echo "### Download: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/dev-unsigned" >> "$GITHUB_STEP_SUMMARY"

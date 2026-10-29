@@ -52,10 +52,35 @@ jobs:
     with:
       skip_package: true
 
+  # Build jobs upload straight to a draft release instead of passing files
+  # around as Actions artifacts, which this account has no storage for.
+  draft:
+    name: Create draft release
+    needs: [verify, ci]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; re-using it."
+            exit 0
+          fi
+          flags=(--draft --verify-tag --generate-notes --title "WineWrap ${{ needs.verify.outputs.version }}")
+          if [[ "${{ needs.verify.outputs.prerelease }}" == true ]]; then
+            flags+=(--prerelease)
+          fi
+          gh release create "$TAG" "${flags[@]}"
+
   macos:
     name: Build macOS
-    needs: [verify, ci]
+    needs: [verify, draft]
     runs-on: macos-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -102,16 +127,18 @@ jobs:
         if: always() && steps.signing.outputs.identity != ''
         run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: release-macos
-          path: dist/*
-          if-no-files-found: error
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release upload "$TAG" dist/* --clobber
 
   linux:
     name: Build Linux CLI
-    needs: [verify, ci]
+    needs: [verify, draft]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -125,11 +152,11 @@ jobs:
           cp target/release/winewrap README.md LICENSE "dist/$name/"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           rm -r "dist/$name"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: release-linux
-          path: dist/*
-          if-no-files-found: error
+      - name: Upload to release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release upload "$TAG" dist/* --clobber
 
   publish:
     name: Publish GitHub release
@@ -137,20 +164,15 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
     steps:
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: release-*
-          path: dist
-          merge-multiple: true
-      - name: Generate checksums
-        working-directory: dist
-        run: sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
-      - uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.TAG }}
-          name: WineWrap ${{ needs.verify.outputs.version }}
-          prerelease: ${{ needs.verify.outputs.prerelease == 'true' }}
-          generate_release_notes: true
-          fail_on_unmatched_files: true
-          files: dist/*
+      - name: Add checksums
+        run: |
+          gh release download "$TAG" --dir dist --skip-existing
+          rm -f dist/SHA256SUMS.txt
+          (cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt)
+          gh release upload "$TAG" dist/SHA256SUMS.txt --clobber
+      - name: Publish
+        run: gh release edit "$TAG" --draft=false
