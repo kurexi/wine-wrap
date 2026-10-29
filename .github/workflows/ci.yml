@@ -120,12 +120,13 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 30
     env:
-      WINEWRAP_HOME: ${{ runner.temp }}/winewrap-home
       GITHUB_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      # (The runner context isn't available in job-level env.)
+      - run: echo "WINEWRAP_HOME=$RUNNER_TEMP/winewrap-home" >> "$GITHUB_ENV"
       - run: cargo build --locked -p winewrap-cli
       - name: Install Wine with WineWrap (no Homebrew)
         run: target/debug/winewrap runtime install stable
