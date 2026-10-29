@@ -1,5 +1,7 @@
 # WineWrap
 
+> !!! This project is vibe coded 🤖
+
 A CrossOver-style front end for [Wine](https://www.winehq.org/), written in Rust,
 for running Steam and Windows games on macOS.
 
