@@ -5,7 +5,8 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-rust-version.workspace = true
+publish = false
+rust-version = "1.95"  # eframe 0.37 requires 1.95
 
 [[bin]]
 name = "WineWrap"
@@ -17,11 +18,3 @@ eframe.workspace = true
 rfd.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
-
-# `cargo bundle --release -p winewrap-gui` produces WineWrap.app
-[package.metadata.bundle]
-name = "WineWrap"
-identifier = "com.wine-wrap.WineWrap"
-category = "public.app-category.games"
-short_description = "Run Windows games and Steam on macOS with Wine"
-osx_minimum_system_version = "13.0"

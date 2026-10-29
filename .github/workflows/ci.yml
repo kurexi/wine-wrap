@@ -4,27 +4,136 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+  # Lets the release workflow run the same checks before publishing.
+  workflow_call:
+    inputs:
+      package:
+        description: Build the macOS package job
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUSTFLAGS: -D warnings
 
 jobs:
-  check:
-    name: ${{ matrix.os }}
+  fmt:
+    name: Format
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --all --check
+
+  clippy:
+    name: Clippy (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
         os: [macos-latest, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Install GUI build dependencies
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libgtk-3-dev libxkbcommon-dev
-      - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
+      - run: cargo clippy --workspace --all-targets --locked
+
+  test:
+    name: Test (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS arm64
+            os: macos-latest
+          - name: macOS x86_64
+            os: macos-15-intel
+          - name: Linux
+            os: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace --locked
+      - name: CLI smoke test
+        shell: bash
+        env:
+          WINEWRAP_HOME: ${{ runner.temp }}/winewrap-home
+        run: |
+          cargo run --locked -q -p winewrap-cli -- --version
+          cargo run --locked -q -p winewrap-cli -- bottle list
+          cargo run --locked -q -p winewrap-cli -- doctor || true
+
+  msrv:
+    name: Minimum Rust version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Read rust-version from manifests
+        id: msrv
+        run: |
+          echo "core=$(sed -n 's/^rust-version = "\(.*\)"/\1/p' Cargo.toml)" >> "$GITHUB_OUTPUT"
+          echo "gui=$(sed -n 's/^rust-version = "\([^"]*\)".*/\1/p' crates/winewrap-gui/Cargo.toml)" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.core }}
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ steps.msrv.outputs.gui }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Check core + CLI on Rust ${{ steps.msrv.outputs.core }}
+        run: cargo +${{ steps.msrv.outputs.core }} check --locked -p winewrap-core -p winewrap-cli --all-targets
+      - name: Check GUI on Rust ${{ steps.msrv.outputs.gui }}
+        run: cargo +${{ steps.msrv.outputs.gui }} check --locked -p winewrap-gui
+
+  deny:
+    name: Dependencies (licenses, advisories, sources)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+
+  package:
+    name: Package macOS app
+    needs: [clippy, test]
+    # Skipped when the release workflow calls CI, since it packages on its own.
+    if: inputs.package != false
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - name: Build universal .app, .dmg and CLI tarball (ad-hoc signed)
+        env:
+          VERSION: 0.0.0-ci.${{ github.run_number }}
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: scripts/package-macos.sh universal
+      - name: Verify the bundle runs
+        run: |
+          hdiutil attach dist/*.dmg -mountpoint /tmp/winewrap-dmg -nobrowse
+          /tmp/winewrap-dmg/WineWrap.app/Contents/MacOS/winewrap --version
+          hdiutil detach /tmp/winewrap-dmg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: winewrap-macos-${{ github.sha }}
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14

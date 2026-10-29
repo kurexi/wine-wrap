@@ -38,15 +38,19 @@ cargo build --release
 ```
 
 This produces `target/release/winewrap` (CLI) and `target/release/WineWrap` (GUI).
-To build a double-clickable `WineWrap.app`:
+To build a double-clickable `WineWrap.app` in a `.dmg`, plus a CLI tarball,
+run this on a Mac. It writes to `dist/`:
 
 ```bash
-cargo install cargo-bundle
+scripts/package-macos.sh            # universal (Apple Silicon + Intel)
 ```
 
 ```bash
-cargo bundle --release -p winewrap-gui
+scripts/package-macos.sh native     # current architecture only, faster
 ```
+
+Prebuilt downloads are attached to each
+[GitHub release](https://github.com/hashspace-apps/wine-wrap/releases).
 
 ## Quick start (CLI)
 
@@ -132,6 +136,45 @@ the logic unit-testable without Wine installed, and both front ends share it.
 cargo test --workspace
 cargo clippy --workspace --all-targets
 ```
+
+## CI/CD
+
+GitHub Actions workflows live in `.github/workflows/`:
+
+| Workflow | Runs on | Does |
+|---|---|---|
+| `ci.yml` | every push to `main`, every pull request | `cargo fmt --check`; clippy on macOS and Linux; tests on macOS arm64, macOS x86_64 and Linux; a minimum Rust version check (1.85 for core/CLI, 1.95 for the GUI); `cargo deny` (licenses, RustSec advisories, crate sources); then builds the universal `.dmg` and uploads it as a workflow artifact |
+| `release.yml` | pushing a `v*.*.*` tag | checks that the tag matches `Cargo.toml`, runs CI, builds the macOS `.dmg`, the macOS CLI tarball and a Linux CLI tarball, and publishes a GitHub release with `SHA256SUMS.txt` |
+
+Dependabot (`.github/dependabot.yml`) opens weekly update PRs for crates and actions.
+
+### Cutting a release
+
+1. Bump `version` in the root `Cargo.toml` and run `cargo check` so `Cargo.lock` updates.
+2. Commit, then tag and push:
+
+```bash
+git tag v0.2.0
+```
+
+```bash
+git push origin v0.2.0
+```
+
+Tags with a suffix such as `v0.2.0-beta.1` are published as pre-releases.
+
+### Code signing (optional)
+
+Without signing secrets, release builds are ad-hoc signed and macOS asks users
+to right-click → **Open** on first launch. To ship a signed and notarized app,
+add these repository secrets:
+
+| Secret | Value |
+|---|---|
+| `MACOS_CERTIFICATE_P12` | base64 of your *Developer ID Application* certificate exported as `.p12` |
+| `MACOS_CERTIFICATE_PASSWORD` | password of that `.p12` |
+| `MACOS_SIGNING_IDENTITY` | e.g. `Developer ID Application: Your Name (TEAMID)` |
+| `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD` | for notarization; use an app-specific password |
 
 ## License
 
