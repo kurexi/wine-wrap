@@ -183,6 +183,29 @@ impl WineWrap {
         Ok(dest)
     }
 
+    /// Install Microsoft's Visual C++ runtime (64- and 32-bit) into a bottle,
+    /// downloading the installers if they aren't cached.
+    pub fn install_vc_runtime(
+        &self,
+        bottle: &Bottle,
+        runtime: &WineRuntime,
+        mut progress: impl FnMut(u64, Option<u64>),
+    ) -> Result<()> {
+        for (url, file) in steam::VC_REDIST {
+            let installer = self.paths.downloads_dir().join(file);
+            if !installer.is_file() {
+                download::download(url, &installer, &mut progress)?;
+            }
+            let spec = steam::vc_redist_command(bottle, runtime, &installer);
+            let status = spec.status()?;
+            // 1638: a newer version is already installed; 3010: reboot needed.
+            if !matches!(status.code(), Some(0 | 1638 | 3010)) {
+                return Err(spec.command_error(format!("exited with {status}")));
+            }
+        }
+        Ok(())
+    }
+
     // ---- diagnostics ----------------------------------------------------
 
     pub fn doctor(&self) -> Vec<Check> {

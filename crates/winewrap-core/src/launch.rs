@@ -14,6 +14,9 @@ use crate::runtime::WineRuntime;
 
 /// DLLs that DXVK replaces.
 const DXVK_DLLS: &str = "dxgi,d3d9,d3d10core,d3d11";
+/// Microsoft's Visual C++ 2015-2022 runtime.
+const VC_RUNTIME_DLLS: &str = "concrt140,msvcp140,msvcp140_1,msvcp140_2,\
+    msvcp140_atomic_wait,msvcp140_codecvt_ids,vcomp140,vcruntime140,vcruntime140_1";
 
 /// A fully-resolved command line: program, arguments, environment and working
 /// directory. Building one has no side effects, so it can be inspected,
@@ -205,6 +208,11 @@ pub fn wine_env(bottle: &Bottle, runtime: &WineRuntime) -> BTreeMap<String, Stri
         }
         GraphicsBackend::D3DMetal | GraphicsBackend::WineD3D => {}
     }
+    // Use Microsoft's Visual C++ runtime once it's installed (Steam installs
+    // it for most games): some games check its DLLs and reject Wine's own,
+    // e.g. Phantom Blade Zero's launcher. Where it isn't installed, Wine
+    // falls back to its builtins.
+    overrides.push(format!("{VC_RUNTIME_DLLS}=n,b"));
 
     if cfg.metal_hud {
         env.insert("MTL_HUD_ENABLED".into(), "1".into());
@@ -222,9 +230,7 @@ pub fn wine_env(bottle: &Bottle, runtime: &WineRuntime) -> BTreeMap<String, Stri
             env.insert(k.clone(), v.clone());
         }
     }
-    if !overrides.is_empty() {
-        env.insert("WINEDLLOVERRIDES".into(), overrides.join(";"));
-    }
+    env.insert("WINEDLLOVERRIDES".into(), overrides.join(";"));
     env
 }
 
@@ -251,7 +257,10 @@ mod tests {
         let env = wine_env(&bottle, &rt);
         assert_eq!(env["WINEPREFIX"], bottle.path.to_string_lossy());
         assert_eq!(env["WINEMSYNC"], "1");
-        assert_eq!(env["WINEDLLOVERRIDES"], "dxgi,d3d9,d3d10core,d3d11,d3d12=b");
+        assert_eq!(
+            env["WINEDLLOVERRIDES"],
+            format!("dxgi,d3d9,d3d10core,d3d11,d3d12=b;{VC_RUNTIME_DLLS}=n,b")
+        );
         assert!(!env.contains_key("MTL_HUD_ENABLED"));
     }
 
@@ -269,7 +278,7 @@ mod tests {
         let env = wine_env(&bottle, &rt);
         assert_eq!(
             env["WINEDLLOVERRIDES"],
-            "dxgi,d3d9,d3d10core,d3d11=n,b;winemenubuilder.exe=d"
+            format!("dxgi,d3d9,d3d10core,d3d11=n,b;{VC_RUNTIME_DLLS}=n,b;winemenubuilder.exe=d")
         );
         assert_eq!(env["DXVK_ASYNC"], "1");
         assert_eq!(env["WINEESYNC"], "1");
@@ -279,9 +288,12 @@ mod tests {
     }
 
     #[test]
-    fn d3dmetal_without_support_sets_no_overrides() {
+    fn d3dmetal_without_support_only_prefers_native_vc_runtime() {
         let (bottle, rt, _d) = fixture(BottleConfig::new("Steam"), RuntimeKind::AppBundle);
-        assert!(!wine_env(&bottle, &rt).contains_key("WINEDLLOVERRIDES"));
+        assert_eq!(
+            wine_env(&bottle, &rt)["WINEDLLOVERRIDES"],
+            format!("{VC_RUNTIME_DLLS}=n,b")
+        );
     }
 
     #[test]
