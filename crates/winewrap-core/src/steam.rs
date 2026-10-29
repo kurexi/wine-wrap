@@ -283,6 +283,7 @@ mod tests {
         assert!(with(Some("wine-staging-11.20")));
         assert!(with(Some("wine-winewrap-0.1.0")));
         assert!(with(Some("wine-winewrap-26.3.0")));
+        assert!(with(Some("wine-winewrap-26.3.0-2")));
         assert!(!with(Some(&wine_builds::winewrap_build().runtime_name())));
         assert!(!with(Some("gptk")));
         assert!(!with(Some("my-wine")));
