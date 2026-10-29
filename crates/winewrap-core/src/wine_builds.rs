@@ -145,9 +145,16 @@ pub fn latest_build(flavor: WineFlavor) -> Result<WineBuild> {
         url: RELEASES_API.into(),
         message,
     };
-    let body = download::agent()
+    let mut request = download::agent()
         .get(RELEASES_API)
-        .header("Accept", "application/vnd.github+json")
+        .header("Accept", "application/vnd.github+json");
+    // Anonymous API calls are rate-limited per IP; CI runners share IPs.
+    if let Ok(token) = std::env::var("GITHUB_TOKEN") {
+        if !token.is_empty() {
+            request = request.header("Authorization", &format!("Bearer {token}"));
+        }
+    }
+    let body = request
         .call()
         .map_err(|e| fail(e.to_string()))?
         .body_mut()

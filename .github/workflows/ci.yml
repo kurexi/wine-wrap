@@ -114,6 +114,30 @@ jobs:
         with:
           command: check
 
+  e2e:
+    name: End-to-end on macOS (install Wine, create a bottle)
+    needs: [test]
+    runs-on: macos-latest
+    timeout-minutes: 30
+    env:
+      WINEWRAP_HOME: ${{ runner.temp }}/winewrap-home
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --locked -p winewrap-cli
+      - name: Install Wine with WineWrap (no Homebrew)
+        run: target/debug/winewrap runtime install stable
+      - run: target/debug/winewrap runtime list
+      - name: Create a bottle
+        run: target/debug/winewrap -v bottle create E2E
+      - name: Check the bottle
+        run: |
+          target/debug/winewrap bottle list
+          test -f "$WINEWRAP_HOME/data/bottles/E2E/system.reg"
+          target/debug/winewrap kill E2E || true
+
   package:
     name: Package macOS app
     needs: [clippy, test]
