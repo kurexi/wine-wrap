@@ -433,9 +433,12 @@ impl WineWrapApp {
                 .clicked()
             {
                 if let Some(rt) = self.with_runtime(&bottle) {
-                    let spec = bottle.kill_command(&rt);
-                    if let Err(e) = spec.run() {
-                        self.push_log(e.to_string());
+                    match bottle.kill(&rt) {
+                        Ok(true) => {}
+                        Ok(false) => {
+                            self.push_log(format!("Nothing is running in {}.", bottle.name()))
+                        }
+                        Err(e) => self.push_log(e.to_string()),
                     }
                 }
             }

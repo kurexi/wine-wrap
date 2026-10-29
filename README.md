@@ -144,10 +144,36 @@ steam_args = []
 
 ## Troubleshooting
 
-* **Steam window is black or blank**: set `winewrap bottle set Steam steam_args "-cef-disable-gpu"` and relaunch.
+* **Steam window is black**: a known limitation of upstream Wine on macOS
+  (tested with 11.0 and 11.20). Steam's UI renders, but Chromium draws it from a
+  helper process into a window another process owns, and Wine's macOS driver
+  doesn't show that. Steam arguments such as `-cef-disable-gpu` don't help.
+  A Wine built with `scripts/build-wine-macos.sh` fixes it; see
+  [Building Wine for Steam](#building-wine-for-steam).
 * **A game says your CPU lacks AVX**: on macOS 15 or later, enable `advertise_avx`.
 * **Nothing happens on launch**: check the newest file in the logs directory, or
   run the command printed by `--dry-run` yourself with `WINEDEBUG=+err` set.
+
+## Building Wine for Steam
+
+`scripts/build-wine-macos.sh` builds an x86_64 macOS Wine from CodeWeavers'
+LGPL [CrossOver source](https://www.codeweavers.com/crossover/source) (Wine 11.0
+base) plus the patches in `scripts/wine-patches/`, which make Steam's UI show.
+It needs Xcode (and Rosetta on Apple Silicon), but no Homebrew or MacPorts:
+every dependency is downloaded with a pinned checksum and built into the work
+directory. A full build takes about 30 minutes.
+
+```bash
+scripts/build-wine-macos.sh        # writes target/wine-build/wine-winewrap-*-osx64.tar.xz
+```
+
+To use the result, extract it and register it as a runtime for your Steam bottle:
+
+```bash
+tar xJf target/wine-build/wine-winewrap-*-osx64.tar.xz -C ~/Applications
+winewrap runtime add winewrap-cx ~/Applications/"Wine WineWrap.app"
+winewrap bottle set Steam runtime winewrap-cx
+```
 
 ## Project layout
 

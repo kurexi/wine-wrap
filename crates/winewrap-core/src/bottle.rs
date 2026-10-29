@@ -322,6 +322,18 @@ impl Bottle {
     pub fn kill_command(&self, runtime: &WineRuntime) -> LaunchSpec {
         LaunchSpec::wineserver(self, runtime).arg("--kill")
     }
+
+    /// Run [`Self::kill_command`]. Returns `false` if nothing was running:
+    /// `wineserver --kill` exits with 1 when the prefix has no server.
+    pub fn kill(&self, runtime: &WineRuntime) -> Result<bool> {
+        let spec = self.kill_command(runtime);
+        let status = spec.status()?;
+        match status.code() {
+            Some(0) => Ok(true),
+            Some(1) => Ok(false),
+            _ => Err(spec.command_error(format!("exited with {status}"))),
+        }
+    }
 }
 
 /// Bottle names become directory names, so keep them filesystem-friendly.
@@ -446,6 +458,27 @@ mod tests {
         assert!(b.drive_c().join("windows/system32/dxgi.dll").is_file());
         assert!(b.drive_c().join("windows/syswow64/d3d11.dll").is_file());
         assert!(b.install_dxvk(dir.path()).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn kill_treats_exit_1_as_nothing_running() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("rt");
+        crate::runtime::tests::fake_runtime(&root, "wine");
+        let rt = WineRuntime::from_root("rt", &root, crate::runtime::RuntimeKind::Custom).unwrap();
+        let b = Bottle {
+            path: dir.path().join("b"),
+            config: BottleConfig::new("b"),
+        };
+        let wineserver = root.join("bin/wineserver");
+        for (code, expected) in [(0, Some(true)), (1, Some(false)), (2, None)] {
+            std::fs::write(&wineserver, format!("#!/bin/sh\nexit {code}\n")).unwrap();
+            std::fs::set_permissions(&wineserver, std::fs::Permissions::from_mode(0o755)).unwrap();
+            assert_eq!(b.kill(&rt).ok(), expected, "exit {code}");
+        }
     }
 
     #[test]

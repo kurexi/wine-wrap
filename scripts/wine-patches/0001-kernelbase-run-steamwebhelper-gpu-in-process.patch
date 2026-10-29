@@ -1,0 +1,40 @@
+kernelbase: Run Steam's Chromium GPU work in the browser process.
+
+Steam's UI (steamwebhelper, CEF) draws from Chromium's GPU process into a
+window the browser process owns. winemac doesn't present that cross-process
+output, so the Steam window stays black. Append the flags Steam gets under
+CrossOver (--no-sandbox --in-process-gpu --disable-gpu) to the main
+steamwebhelper.exe command line; child processes (--type=...) are untouched.
+Steam has no launch option that produces --in-process-gpu.
+
+Applies to the Wine tree in CodeWeavers' crossover-sources (26.3.0).
+
+--- a/dlls/kernelbase/process.c
++++ b/dlls/kernelbase/process.c
+@@ -552,6 +552,26 @@
+         epic_launcher_hack = TRUE;
+         orig_lpDesktop = startup_info->lpDesktop;
+         startup_info->lpDesktop = winsta0_defaultW;
++    }
++
++    /* WineWrap hack: Steam's Chromium draws from its GPU process into a window
++     * the browser process owns, which winemac doesn't present. Keep GPU work
++     * in the browser process, as Steam does under CrossOver. */
++    if (tidy_cmdline && wcsstr( tidy_cmdline, L"steamwebhelper.exe" ) &&
++        !wcsstr( tidy_cmdline, L"--type=" ) && !wcsstr( tidy_cmdline, L"--in-process-gpu" ))
++    {
++        static const WCHAR extraW[] = L" --no-sandbox --in-process-gpu --disable-gpu";
++        size_t len = lstrlenW( tidy_cmdline );
++        WCHAR *new_cmdline = RtlAllocateHeap( GetProcessHeap(), 0, (len + ARRAY_SIZE(extraW)) * sizeof(WCHAR) );
++
++        if (new_cmdline)
++        {
++            FIXME( "HACK: running steamwebhelper's GPU work in-process\n" );
++            memcpy( new_cmdline, tidy_cmdline, len * sizeof(WCHAR) );
++            memcpy( new_cmdline + len, extraW, sizeof(extraW) );
++            if (tidy_cmdline != cmd_line) HeapFree( GetProcessHeap(), 0, tidy_cmdline );
++            tidy_cmdline = new_cmdline;
++        }
+     }
+ 
+     /* CW Hack 24920, 24557 */
