@@ -1,8 +1,11 @@
 //! Installing and running the Windows Steam client inside a bottle.
 
+use std::hash::BuildHasher;
 use std::path::{Path, PathBuf};
 
 use crate::bottle::{Bottle, BottleConfig};
+use crate::config::write_atomic;
+use crate::error::{Error, IoContext, Result};
 use crate::launch::LaunchSpec;
 use crate::runtime::WineRuntime;
 use crate::vdf::{self, Vdf};
@@ -110,6 +113,103 @@ pub fn library_folders(bottle: &Bottle) -> Vec<PathBuf> {
     folders
 }
 
+/// Make each of the bottle's game folders (`BottleConfig::drives`) a Steam
+/// library, so games can be installed there. Adds them to
+/// `steamapps/libraryfolders.vdf`, which Steam reads when it starts. Folders
+/// that are missing (disk not connected) are skipped, and so is everything
+/// until Steam has run once and written that file. Returns the Windows paths
+/// added.
+pub fn register_libraries(bottle: &Bottle) -> Result<Vec<String>> {
+    let vdf_path = steam_dir(bottle).join("steamapps/libraryfolders.vdf");
+    let Ok(text) = std::fs::read_to_string(&vdf_path) else {
+        return Ok(Vec::new());
+    };
+    let parse_error = |message: String| Error::Parse {
+        path: vdf_path.clone(),
+        message,
+    };
+    let mut doc = vdf::parse(&text).map_err(|e| parse_error(e.to_string()))?;
+    let Vdf::Obj(top) = &mut doc else {
+        unreachable!("parse returns an object");
+    };
+    let Some((_, Vdf::Obj(folders))) = top
+        .iter_mut()
+        .find(|(k, _)| k.eq_ignore_ascii_case("libraryfolders"))
+    else {
+        return Err(parse_error("no \"libraryfolders\" section".into()));
+    };
+    let known: Vec<PathBuf> = folders
+        .iter()
+        .filter_map(|(_, f)| f.get("path").and_then(Vdf::as_str))
+        .filter_map(|p| bottle.windows_to_host(p))
+        .collect();
+
+    let mut added = Vec::new();
+    for (letter, folder) in &bottle.config.drives {
+        let win_path = format!("{}:\\", letter.to_uppercase());
+        let registered = bottle
+            .windows_to_host(&win_path)
+            .is_some_and(|host| known.contains(&host));
+        if registered || !folder.is_dir() {
+            continue;
+        }
+        let content_id = library_content_id(folder)?;
+        let key = folders
+            .iter()
+            .filter_map(|(k, _)| k.parse::<u32>().ok())
+            .max()
+            .map_or(0, |n| n + 1);
+        let s = |v: &str| Vdf::Str(v.to_string());
+        let entry = [
+            ("path", s(&win_path)),
+            ("label", s("")),
+            ("contentid", s(&content_id)),
+            ("totalsize", s("0")),
+            ("update_clean_bytes_tally", s("0")),
+            ("time_last_update_verified", s("0")),
+            ("apps", Vdf::Obj(Vec::new())),
+        ];
+        folders.push((
+            key.to_string(),
+            Vdf::Obj(entry.into_iter().map(|(k, v)| (k.to_string(), v)).collect()),
+        ));
+        added.push(win_path);
+    }
+    if !added.is_empty() {
+        write_atomic(&vdf_path, vdf::write(&doc).as_bytes())?;
+    }
+    Ok(added)
+}
+
+/// The content ID from a library folder's own `libraryfolder.vdf`. If the
+/// folder isn't a Steam library yet, set it up as Steam does: a new ID in
+/// `libraryfolder.vdf`, and an empty `steamapps/`.
+fn library_content_id(folder: &Path) -> Result<String> {
+    let file = folder.join("libraryfolder.vdf");
+    let existing = std::fs::read_to_string(&file)
+        .ok()
+        .and_then(|text| vdf::parse(&text).ok())
+        .and_then(|doc| {
+            doc.at(&["libraryfolder", "contentid"])
+                .and_then(Vdf::as_str)
+                .map(str::to_string)
+        });
+    if let Some(id) = existing {
+        return Ok(id);
+    }
+    // Steam's IDs are random non-negative 64-bit numbers.
+    let id = (std::hash::RandomState::new().hash_one(folder) >> 1).to_string();
+    let steamapps = folder.join("steamapps");
+    std::fs::create_dir_all(&steamapps).at(&steamapps)?;
+    let s = |v: &str| Vdf::Str(v.to_string());
+    let doc = Vdf::Obj(vec![(
+        "libraryfolder".into(),
+        Vdf::Obj(vec![("contentid".into(), s(&id)), ("label".into(), s(""))]),
+    )]);
+    write_atomic(&file, vdf::write(&doc).as_bytes())?;
+    Ok(id)
+}
+
 /// Parse one app manifest.
 pub fn parse_manifest(text: &str, library: &Path) -> Option<SteamGame> {
     let doc = vdf::parse(text).ok()?;
@@ -185,6 +285,48 @@ mod tests {
         assert!(!with(Some(&wine_builds::winewrap_build().runtime_name())));
         assert!(!with(Some("gptk")));
         assert!(!with(Some("my-wine")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn game_folders_become_steam_libraries() {
+        let dir = tempfile::tempdir().unwrap();
+        let ssd = dir.path().join("SSD/SteamLibrary");
+        std::fs::create_dir_all(&ssd).unwrap();
+        let mut bottle = Bottle {
+            path: dir.path().join("b"),
+            config: BottleConfig::new("Steam"),
+        };
+        std::fs::create_dir_all(bottle.path.join("dosdevices")).unwrap();
+        let apps = steam_dir(&bottle).join("steamapps");
+        std::fs::create_dir_all(&apps).unwrap();
+        let vdf_path = apps.join("libraryfolders.vdf");
+        std::fs::write(
+            &vdf_path,
+            "\"libraryfolders\"\n{\n\t\"0\"\n\t{\n\t\t\"path\"\t\t\"C:\\\\Program Files (x86)\\\\Steam\"\n\t}\n}\n",
+        )
+        .unwrap();
+
+        bottle.config.drives.insert("d".into(), ssd.clone());
+        bottle
+            .config
+            .drives
+            .insert("e".into(), dir.path().join("unplugged"));
+        bottle.save().unwrap();
+        assert_eq!(register_libraries(&bottle).unwrap(), [r"D:\"]);
+        // Already registered: nothing to do.
+        assert!(register_libraries(&bottle).unwrap().is_empty());
+
+        let doc = vdf::parse(&std::fs::read_to_string(&vdf_path).unwrap()).unwrap();
+        let entry = doc.at(&["libraryfolders", "1"]).unwrap();
+        assert_eq!(entry.get("path").and_then(Vdf::as_str), Some(r"D:\"));
+        let id = entry.get("contentid").and_then(Vdf::as_str).unwrap();
+        assert_eq!(library_content_id(&ssd).unwrap(), id);
+        assert!(ssd.join("steamapps").is_dir());
+        assert_eq!(
+            library_folders(&bottle)[1],
+            bottle.path.join("dosdevices/d:")
+        );
     }
 
     #[test]

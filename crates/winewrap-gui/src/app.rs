@@ -238,6 +238,9 @@ impl WineWrapApp {
             None => steam::launch_command(b, rt),
         };
         if !needs_steam_runtime(&bottle.config) {
+            for line in register_steam_libraries(bottle) {
+                self.push_log(line);
+            }
             if let Some(rt) = self.with_runtime(bottle) {
                 self.spawn(command(bottle, &rt), &label);
             }
@@ -250,6 +253,9 @@ impl WineWrapApp {
             format!("Start Steam in {:?}", bottle.name()),
             move |r| {
                 let rt = prepare_steam_runtime(&ww, &mut bottle, r)?;
+                register_steam_libraries(&bottle)
+                    .into_iter()
+                    .for_each(|line| r.log(line));
                 let (child, log) =
                     command(&bottle, &rt).spawn_logged(&ww.paths.logs_dir(), &label)?;
                 r.log(format!(
@@ -277,6 +283,9 @@ impl WineWrapApp {
             return self.push_log(format!("Failed to save settings: {e}"));
         }
         self.push_log(format!("Saved settings for {:?}", bottle.name()));
+        for line in register_steam_libraries(&bottle) {
+            self.push_log(line);
+        }
         if registry_changed && bottle.is_initialized() {
             if let Some(rt) = self.with_runtime(&bottle) {
                 self.jobs.spawn(
@@ -574,6 +583,9 @@ impl WineWrapApp {
                 draft.steam_args = args.split_whitespace().map(str::to_string).collect();
             }
         });
+
+        ui.add_space(6.0);
+        game_folders_form(ui, bottle, draft);
 
         ui.add_space(6.0);
         let changed = Some(&bottle.config) != self.draft.as_ref();
@@ -930,6 +942,59 @@ fn settings_form(ui: &mut egui::Ui, cfg: &mut BottleConfig, runtimes: &[WineRunt
         });
 }
 
+/// Folders outside the bottle that games can be installed to, e.g. on an
+/// external disk (`BottleConfig::drives`). Each gets a drive letter behind the
+/// scenes; in a Steam bottle it also becomes a Steam library. Edits the draft.
+fn game_folders_form(ui: &mut egui::Ui, bottle: &Bottle, draft: &mut BottleConfig) {
+    ui.label(egui::RichText::new("Game folders").strong());
+    ui.weak("Install games outside the bottle, e.g. on an external disk.");
+    let mut remove = None;
+    egui::Grid::new("game_folders")
+        .num_columns(2)
+        .spacing([12.0, 4.0])
+        .show(ui, |ui| {
+            for (letter, path) in &draft.drives {
+                ui.horizontal(|ui| {
+                    ui.label(path.display().to_string())
+                        .on_hover_text(format!("Windows sees it as {}:", letter.to_uppercase()));
+                    if !path.is_dir() {
+                        ui.colored_label(ui.visuals().warn_fg_color, "⚠ not found")
+                            .on_hover_text("Is the disk connected?");
+                    }
+                });
+                if ui.small_button("Remove").clicked() {
+                    remove = Some(letter.clone());
+                }
+                ui.end_row();
+            }
+        });
+    if let Some(letter) = remove {
+        draft.drives.remove(&letter);
+    }
+
+    let next = Bottle {
+        path: bottle.path.clone(),
+        config: draft.clone(),
+    }
+    .free_drive_letter();
+    let add = ui.add_enabled(next.is_some(), egui::Button::new("Add folder…"));
+    if let (true, Some(letter)) = (add.clicked(), next) {
+        let picked = rfd::FileDialog::new()
+            .set_title("Choose a folder for games")
+            .set_directory("/Volumes")
+            .pick_folder();
+        if let Some(dir) = picked.filter(|d| !draft.drives.values().any(|p| p == d)) {
+            draft.drives.insert(letter, dir);
+        }
+    }
+    if steam::is_installed(bottle) && !draft.drives.is_empty() {
+        ui.weak(
+            "Saved folders become Steam libraries the next time Steam starts: \
+             choose one when installing a game.",
+        );
+    }
+}
+
 fn enum_combo<T>(ui: &mut egui::Ui, id: &str, value: &mut T, all: &[T])
 where
     T: Copy + PartialEq + std::fmt::Display,
@@ -973,6 +1038,33 @@ fn prepare_steam_runtime(
     }
     r.progress(None);
     ww.runtime_for(bottle)
+}
+
+/// Make the bottle's game folders Steam libraries (see
+/// `steam::register_libraries`). Returns lines for the activity log.
+fn register_steam_libraries(bottle: &Bottle) -> Vec<String> {
+    if !steam::is_installed(bottle) {
+        return Vec::new();
+    }
+    match steam::register_libraries(bottle) {
+        Ok(added) => added
+            .iter()
+            .map(|win_path| {
+                let letter = win_path[..1].to_ascii_lowercase();
+                let folder = bottle
+                    .config
+                    .drives
+                    .get(&letter)
+                    .cloned()
+                    .unwrap_or_default();
+                format!(
+                    "Added {} to Steam's libraries; choose it when installing a game.",
+                    folder.display()
+                )
+            })
+            .collect(),
+        Err(e) => vec![format!("Could not add game folders to Steam: {e}")],
+    }
 }
 
 /// Report a Wine download to the progress bar and log.

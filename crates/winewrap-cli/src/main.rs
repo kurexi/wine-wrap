@@ -87,7 +87,8 @@ enum BottleCmd {
     Create(CreateArgs),
     /// Show a bottle's settings.
     Show { name: String },
-    /// Change a setting, e.g. `graphics dxvk` or `env.DXVK_HUD fps`.
+    /// Change a setting, e.g. `graphics dxvk`, `env.DXVK_HUD fps` or
+    /// `drive.d /Volumes/SSD/SteamLibrary`.
     Set {
         name: String,
         key: String,
@@ -384,6 +385,9 @@ fn bottle(ww: &WineWrap, runner: &Runner, cmd: BottleCmd) -> Result<()> {
             if matches!(key.as_str(), "windows_version" | "retina") {
                 println!("Run `winewrap bottle apply {name:?}` to update the Wine registry.");
             }
+            if key.starts_with("drive.") && !value.is_empty() {
+                register_steam_libraries(&b)?;
+            }
         }
         BottleCmd::Apply { name } => {
             let (b, rt) = open_bottle(ww, &name)?;
@@ -530,7 +534,26 @@ fn open_steam_bottle(
     let mut b = ww.bottle(name)?;
     ensure_steam(&b)?;
     use_steam_runtime(ww, runner, &mut b)?;
+    if !runner.dry_run {
+        register_steam_libraries(&b)?;
+    }
     open_bottle(ww, name)
+}
+
+/// Make the bottle's game folders Steam libraries (see
+/// `steam::register_libraries`).
+fn register_steam_libraries(b: &Bottle) -> Result<()> {
+    if !steam::is_installed(b) {
+        return Ok(());
+    }
+    for path in steam::register_libraries(b)? {
+        let folder = b.windows_to_host(&path).unwrap_or_default();
+        println!(
+            "Added {} to Steam's libraries (as {path}); choose it when installing a game.",
+            std::fs::read_link(&folder).unwrap_or(folder).display()
+        );
+    }
+    Ok(())
 }
 
 fn use_steam_runtime(ww: &WineWrap, runner: &Runner, b: &mut Bottle) -> Result<()> {

@@ -119,6 +119,9 @@ pub struct BottleConfig {
     pub steam_args: Vec<String>,
     /// Extra environment variables for every process in the bottle.
     pub env: BTreeMap<String, String>,
+    /// Extra Windows drives: letter (`d` to `y`) → Mac folder, e.g. a Steam
+    /// library on an external disk.
+    pub drives: BTreeMap<String, PathBuf>,
 }
 
 impl Default for BottleConfig {
@@ -141,6 +144,7 @@ impl BottleConfig {
             dxvk_async: false,
             steam_args: Vec::new(),
             env: BTreeMap::new(),
+            drives: BTreeMap::new(),
         }
     }
 
@@ -173,10 +177,18 @@ impl BottleConfig {
                     } else {
                         self.env.insert(var.to_string(), value.to_string());
                     }
+                } else if let Some(letter) = key.strip_prefix("drive.") {
+                    let letter = drive_letter(letter)?;
+                    if value.is_empty() {
+                        self.drives.remove(&letter);
+                    } else {
+                        self.drives.insert(letter, PathBuf::from(value));
+                    }
                 } else {
                     return Err(format!(
                         "unknown setting {key:?}; known: runtime, windows_version, graphics, sync, \
-                         retina, metal_hud, advertise_avx, dxvk_async, steam_args, env.<VAR>"
+                         retina, metal_hud, advertise_avx, dxvk_async, steam_args, env.<VAR>, \
+                         drive.<letter>"
                     ));
                 }
             }
@@ -228,12 +240,63 @@ impl Bottle {
         Ok(Self { path, config })
     }
 
+    /// Write `bottle.toml` and update the prefix's drive links to match.
     pub fn save(&self) -> Result<()> {
+        let previous = Self::load(&self.path)
+            .map(|b| b.config.drives)
+            .unwrap_or_default();
         std::fs::create_dir_all(&self.path).at(&self.path)?;
         write_atomic(
             &self.config_path(),
             toml::to_string_pretty(&self.config)?.as_bytes(),
-        )
+        )?;
+        self.sync_drives(&previous)
+    }
+
+    /// Point `dosdevices/<letter>:` at each configured drive, and remove the
+    /// links of drives in `previous` that are no longer configured. Only
+    /// symlinks are touched. Does nothing before `wineboot` has created
+    /// `dosdevices`.
+    pub fn sync_drives(&self, previous: &BTreeMap<String, PathBuf>) -> Result<()> {
+        let dir = self.path.join("dosdevices");
+        if !dir.is_dir() {
+            return Ok(());
+        }
+        let link = |letter: &str| dir.join(format!("{letter}:"));
+        for letter in previous.keys() {
+            let path = link(letter);
+            if !self.config.drives.contains_key(letter) && path.is_symlink() {
+                std::fs::remove_file(&path).at(&path)?;
+            }
+        }
+        for (letter, target) in &self.config.drives {
+            if drive_letter(letter).is_err() {
+                tracing::warn!("{}: ignoring invalid drive {letter:?}", self.name());
+                continue;
+            }
+            let path = link(letter);
+            if std::fs::read_link(&path).is_ok_and(|t| t == *target) {
+                continue;
+            }
+            if path.is_symlink() {
+                std::fs::remove_file(&path).at(&path)?;
+            } else if path.exists() {
+                tracing::warn!("{}: not replacing {}", self.name(), path.display());
+                continue;
+            }
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(target, &path).at(&path)?;
+        }
+        Ok(())
+    }
+
+    /// The first drive letter that is neither configured nor already used by
+    /// Wine in this prefix.
+    pub fn free_drive_letter(&self) -> Option<String> {
+        ('d'..='y').map(String::from).find(|l| {
+            !self.config.drives.contains_key(l)
+                && !self.path.join("dosdevices").join(format!("{l}:")).exists()
+        })
     }
 
     /// Convert a Windows path inside this bottle (e.g. `C:\Games\x.exe`) to a
@@ -336,6 +399,16 @@ impl Bottle {
     }
 }
 
+/// Normalise a drive letter for [`BottleConfig::drives`] (`"D:"` → `"d"`).
+/// Only D: to Y: are allowed: Wine uses C: for the bottle and Z: for the Mac's
+/// whole file system.
+pub fn drive_letter(s: &str) -> std::result::Result<String, String> {
+    match s.trim_end_matches(':').to_ascii_lowercase().as_bytes() {
+        [c @ b'd'..=b'y'] => Ok(char::from(*c).to_string()),
+        _ => Err(format!("drive letter must be D to Y, got {s:?}")),
+    }
+}
+
 /// Bottle names become directory names, so keep them filesystem-friendly.
 pub fn validate_name(name: &str) -> Result<()> {
     let ok = !name.trim().is_empty()
@@ -434,6 +507,52 @@ mod tests {
         assert!(cfg.env.is_empty());
         assert!(cfg.set("graphics", "vulkan").is_err());
         assert!(cfg.set("nope", "1").is_err());
+        cfg.set("drive.E:", "/Volumes/SSD/SteamLibrary").unwrap();
+        assert_eq!(cfg.drives["e"], PathBuf::from("/Volumes/SSD/SteamLibrary"));
+        cfg.set("drive.e", "").unwrap();
+        assert!(cfg.drives.is_empty());
+        for bad in ["c", "z", "dd", "1", ""] {
+            assert!(cfg.set(&format!("drive.{bad}"), "/x").is_err(), "{bad:?}");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn drives_become_dosdevices_links() {
+        let dir = tempfile::tempdir().unwrap();
+        let ext = dir.path().join("SSD/SteamLibrary");
+        std::fs::create_dir_all(&ext).unwrap();
+        let mut b = Bottle {
+            path: dir.path().join("b"),
+            config: BottleConfig::new("b"),
+        };
+        let dosdevices = b.path.join("dosdevices");
+        std::fs::create_dir_all(&dosdevices).unwrap();
+        std::os::unix::fs::symlink("/", dosdevices.join("z:")).unwrap();
+        // A drive Wine set up itself is left alone and isn't offered again.
+        std::os::unix::fs::symlink("/tmp", dosdevices.join("d:")).unwrap();
+        assert_eq!(b.free_drive_letter().as_deref(), Some("e"));
+
+        b.config.drives.insert("e".into(), ext.clone());
+        b.save().unwrap();
+        assert_eq!(std::fs::read_link(dosdevices.join("e:")).unwrap(), ext);
+        assert_eq!(
+            b.windows_to_host(r"E:\steamapps"),
+            Some(dosdevices.join("e:/steamapps"))
+        );
+        assert_eq!(b.free_drive_letter().as_deref(), Some("f"));
+
+        // Moving the drive updates the link; removing it deletes the link.
+        b.config.drives.insert("e".into(), dir.path().join("SSD"));
+        b.save().unwrap();
+        assert_eq!(
+            std::fs::read_link(dosdevices.join("e:")).unwrap(),
+            dir.path().join("SSD")
+        );
+        b.config.drives.clear();
+        b.save().unwrap();
+        assert!(!dosdevices.join("e:").is_symlink());
+        assert!(dosdevices.join("d:").is_symlink() && dosdevices.join("z:").is_symlink());
     }
 
     #[test]

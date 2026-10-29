@@ -1,7 +1,7 @@
-//! A minimal parser for Valve's KeyValues text format (`.vdf` / `.acf`), which
+//! A minimal parser and writer for Valve's KeyValues text format (`.vdf` / `.acf`), which
 //! Steam uses for `libraryfolders.vdf` and `appmanifest_*.acf`.
 
-use std::fmt;
+use std::fmt::{self, Write};
 
 /// A KeyValues node: either a string or an ordered list of children.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -165,6 +165,31 @@ pub fn parse(text: &str) -> Result<Vdf, ParseError> {
     Ok(Vdf::Obj(items))
 }
 
+/// Write a document (as returned by [`parse`]) in Steam's own layout: quoted
+/// keys and values, tab indentation.
+pub fn write(doc: &Vdf) -> String {
+    fn quote(s: &str) -> String {
+        format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
+    }
+    fn write_items(out: &mut String, items: &[(String, Vdf)], depth: usize) {
+        let indent = "\t".repeat(depth);
+        for (key, value) in items {
+            // Writing to a String can't fail.
+            let _ = match value {
+                Vdf::Str(v) => writeln!(out, "{indent}{}\t\t{}", quote(key), quote(v)),
+                Vdf::Obj(children) => {
+                    let _ = writeln!(out, "{indent}{}\n{indent}{{", quote(key));
+                    write_items(out, children, depth + 1);
+                    writeln!(out, "{indent}}}")
+                }
+            };
+        }
+    }
+    let mut out = String::new();
+    write_items(&mut out, doc.entries(), 0);
+    out
+}
+
 fn parse_object(lexer: &mut Lexer<'_>, nested: bool) -> Result<Vec<(String, Vdf)>, ParseError> {
     let mut items = Vec::new();
     loop {
@@ -232,6 +257,19 @@ mod tests {
         );
         assert_eq!(root.get("bare").and_then(Vdf::as_str), Some("value"));
         assert_eq!(root.get("q").and_then(Vdf::as_str), Some("a\"b"));
+    }
+
+    #[test]
+    fn writes_what_it_parses() {
+        let text = "\"libraryfolders\"\n{\n\t\"0\"\n\t{\n\t\t\"path\"\t\t\"C:\\\\Program Files (x86)\\\\Steam\"\n\
+                    \t\t\"label\"\t\t\"say \\\"hi\\\"\"\n\t\t\"apps\"\n\t\t{\n\t\t}\n\t}\n}\n";
+        let doc = parse(text).unwrap();
+        assert_eq!(
+            doc.at(&["libraryfolders", "0", "path"])
+                .and_then(Vdf::as_str),
+            Some(r"C:\Program Files (x86)\Steam")
+        );
+        assert_eq!(write(&doc), text);
     }
 
     #[test]
