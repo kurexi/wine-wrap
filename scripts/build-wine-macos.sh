@@ -7,7 +7,7 @@
 # Rosetta on Apple Silicon.
 #
 # Usage: scripts/build-wine-macos.sh [work-dir]   (default: target/wine-build)
-# Output: <work-dir>/wine-winewrap-<cx-version>-osx64.tar.xz
+# Output: <work-dir>/wine-winewrap-<version>-osx64.tar.xz
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -15,11 +15,16 @@ W="$(mkdir -p "${1:-$ROOT/target/wine-build}" && cd "${1:-$ROOT/target/wine-buil
 JOBS="$(sysctl -n hw.ncpu)"
 
 CX_VERSION=26.3.0
+# WineWrap's build of it. Bump the revision whenever the build changes, so
+# Steam bottles move to the new one (see wine_builds.rs).
+VERSION="$CX_VERSION-2"
 GCC_VERSION=15.2.0
 DOWNLOADS=(
   "https://media.codeweavers.com/pub/crossover/source/crossover-sources-$CX_VERSION.tar.gz ac99c8ca4b3848f3e81784135f023df266b61c2345726ea55a50b3e030dd6872"
   "https://ftp.gnu.org/gnu/bison/bison-3.8.2.tar.xz 9bba0214ccf7f1079c5d59210045227bcf619519840ebfa80cd3849cff5a5bf2"
   "https://ftp.gnu.org/gnu/nettle/nettle-3.10.tar.gz b4c518adb174e484cb4acea54118f02380c7133771e7e9beb98a0787194ee47c"
+  # Game controllers: Wine's winebus finds them through SDL.
+  "https://github.com/libsdl-org/SDL/releases/download/release-2.32.10/SDL2-2.32.10.tar.gz 5f5993c530f084535c65a6879e9b26ad441169b3e25d789d83287040a9ca5165"
   "https://download.savannah.gnu.org/releases/freetype/freetype-2.13.3.tar.xz 0550350666d427c74daeb85d5ac7bb353acba5f76956395995311a9c6f063289"
   # MinGW GCC cross toolchain for Wine's Windows-side DLLs (see below).
   "https://ftp.gnu.org/gnu/binutils/binutils-2.45.tar.xz c50c0e7f9cb188980e2cc97e4537626b1672441815587f1eab69d2a1bfbef5d2"
@@ -57,6 +62,7 @@ mkdir -p "$SRC" "$OBJ"
 tar xzf "$DL/crossover-sources-$CX_VERSION.tar.gz" -C "$SRC" sources/wine sources/gnutls
 tar xzf "$DL/nettle-3.10.tar.gz" -C "$SRC"
 tar xJf "$DL/freetype-2.13.3.tar.xz" -C "$SRC"
+tar xzf "$DL/SDL2-2.32.10.tar.gz" -C "$SRC"
 [[ -d "$TOOLS/moltenvk" ]] || { mkdir -p "$TOOLS/moltenvk" && tar xf "$DL/MoltenVK-macos.tar" -C "$TOOLS/moltenvk"; }
 MVK="$TOOLS/moltenvk/MoltenVK/MoltenVK/dynamic/dylib/macOS"
 for p in "$ROOT"/scripts/wine-patches/*.patch; do
@@ -149,14 +155,17 @@ autotools gnutls "$SRC/sources/gnutls/gnutls" --disable-doc --disable-tests --di
   --disable-hardware-acceleration
 autotools freetype "$SRC/freetype-2.13.3" --without-png --without-harfbuzz \
   --without-brotli --without-bzip2 --with-zlib=yes
+autotools sdl2 "$SRC/SDL2-2.32.10"
 
-# Configure flags follow Gcenx's wine-stable Portfile. Wine 11's macOS OpenGL
+# Configure flags follow Gcenx's wine-stable Portfile, including SDL, through
+# which Wine finds game controllers. Wine 11's macOS OpenGL
 # needs EGL, so OpenGL is off (as in Gcenx's builds).
 log "Building Wine (this takes a while)"
 mkdir -p "$OBJ/wine"
 (cd "$OBJ/wine" &&
   FREETYPE_CFLAGS="-I$DEPS/include/freetype2" FREETYPE_LIBS="-lfreetype" \
   GNUTLS_CFLAGS="-I$DEPS/include" GNUTLS_LIBS="-lgnutls" \
+  SDL2_CFLAGS="-I$DEPS/include/SDL2" SDL2_LIBS="-lSDL2" \
   x86 "$SRC/sources/wine/configure" --prefix="$INSTALL" \
     --enable-archs=i386,x86_64 --with-mingw \
     --without-alsa --without-capi --with-coreaudio --with-cups --without-dbus \
@@ -164,7 +173,7 @@ mkdir -p "$OBJ/wine"
     --without-gettextpo --without-gphoto --with-gnutls --without-gssapi \
     --without-gstreamer --without-inotify --without-krb5 --without-netapi \
     --with-opencl --without-opengl --without-oss --with-pcap --with-pthread \
-    --without-pulse --without-sane --without-sdl --without-udev --with-unwind \
+    --without-pulse --without-sane --with-sdl --without-udev --with-unwind \
     --without-usb --without-v4l2 --with-vulkan --without-wayland --without-x \
     --disable-tests --disable-winemenubuilder >configure.log 2>&1 &&
   x86 make -j"$JOBS" >make.log 2>&1 && make install-lib >install.log 2>&1) ||
@@ -180,11 +189,13 @@ cp -R "$INSTALL/." "$P/"
 # Bundled dylibs refer to each other via @loader_path. Wine's unix modules
 # dlopen them by leaf name (libfreetype.6.dylib, libgnutls.30.dylib, ...) but
 # only search their own directory, so point them at lib/ too. Without this
-# there is no text (no FreeType) and no TLS (no GnuTLS).
+# there is no text (no FreeType), no TLS (no GnuTLS) and no game controllers
+# (no SDL).
 for so in "$P"/lib/wine/x86_64-unix/*.so; do
   install_name_tool -add_rpath "@loader_path/../../" "$so"
 done
-for l in libgmp.10.dylib libnettle.8.dylib libhogweed.6.dylib libgnutls.30.dylib libfreetype.6.dylib; do
+for l in libgmp.10.dylib libnettle.8.dylib libhogweed.6.dylib libgnutls.30.dylib libfreetype.6.dylib \
+         libSDL2-2.0.0.dylib; do
   cp -L "$DEPS/lib/$l" "$P/lib/$l"
   chmod u+w "$P/lib/$l"
   install_name_tool -id "@rpath/$l" "$P/lib/$l"
@@ -203,7 +214,7 @@ tar xJf "$DL/wine-gecko-2.47.4-x86_64.tar.xz" -C "$P/share/wine/gecko"
 find "$P/lib" -maxdepth 1 -name '*.dylib' -exec codesign -f -s - {} \; 2>/dev/null
 find "$P/lib/wine/x86_64-unix" -name '*.so' -exec codesign -f -s - {} \; 2>/dev/null
 
-OUT="$W/wine-winewrap-$CX_VERSION-osx64.tar.xz"
+OUT="$W/wine-winewrap-$VERSION-osx64.tar.xz"
 (cd "$W/pkg" && tar cJf "$OUT" "Wine WineWrap.app")
 "$P/bin/wine" --version
 log "Done: $OUT"
