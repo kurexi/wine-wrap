@@ -2,10 +2,11 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::bottle::Bottle;
+use crate::bottle::{Bottle, BottleConfig};
 use crate::launch::LaunchSpec;
 use crate::runtime::WineRuntime;
 use crate::vdf::{self, Vdf};
+use crate::wine_builds::{self, WineFlavor};
 
 /// Valve's official Windows installer.
 pub const STEAM_SETUP_URL: &str =
@@ -38,6 +39,25 @@ pub fn steam_exe(bottle: &Bottle) -> PathBuf {
 
 pub fn is_installed(bottle: &Bottle) -> bool {
     steam_exe(bottle).is_file()
+}
+
+/// Whether a Steam bottle should be moved to WineWrap's own Wine build.
+///
+/// Under upstream Wine on macOS, Steam's window stays black: Chromium draws it
+/// from a helper process, and Wine's macOS driver doesn't show that. That's
+/// true for bottles on the default runtime and on Gcenx's builds (what
+/// "Install Wine" downloads), as well as on older WineWrap builds. Bottles the
+/// user pinned to anything else (GPTK, a custom Wine) are left alone.
+pub fn needs_winewrap_runtime(config: &BottleConfig) -> bool {
+    let Some(name) = &config.runtime else {
+        return true;
+    };
+    if *name == wine_builds::winewrap_build().runtime_name() {
+        return false;
+    }
+    WineFlavor::ALL
+        .iter()
+        .any(|f| name.starts_with(&format!("wine-{f}-")))
 }
 
 /// Run the Steam installer silently.
@@ -142,13 +162,29 @@ pub fn installed_games(bottle: &Bottle) -> Vec<SteamGame> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bottle::BottleConfig;
 
     fn manifest(app_id: u32, name: &str, flags: u32) -> String {
         format!(
             "\"AppState\"\n{{\n\t\"appid\"\t\t\"{app_id}\"\n\t\"name\"\t\t\"{name}\"\n\
              \t\"StateFlags\"\t\t\"{flags}\"\n\t\"installdir\"\t\t\"{name}\"\n}}\n"
         )
+    }
+
+    #[test]
+    fn steam_bottles_move_to_winewrap_wine() {
+        let with = |runtime: Option<&str>| {
+            let mut c = BottleConfig::new("Steam");
+            c.runtime = runtime.map(str::to_string);
+            needs_winewrap_runtime(&c)
+        };
+        assert!(with(None));
+        assert!(with(Some("wine-stable-11.0_1")));
+        assert!(with(Some("wine-devel-11.20")));
+        assert!(with(Some("wine-staging-11.20")));
+        assert!(with(Some("wine-winewrap-0.1.0")));
+        assert!(!with(Some(&wine_builds::winewrap_build().runtime_name())));
+        assert!(!with(Some("gptk")));
+        assert!(!with(Some("my-wine")));
     }
 
     #[test]

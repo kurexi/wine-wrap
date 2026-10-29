@@ -310,10 +310,7 @@ fn runtime(ww: &mut WineWrap, cmd: RuntimeCmd) -> Result<()> {
                 build.runtime_name(),
                 build.size as f64 / 1_048_576.0
             );
-            let rt = wine_builds::install(&ww.paths, &build, |p| match p {
-                InstallProgress::Downloading { done, total } => progress_bar(done, total),
-                InstallProgress::Extracting => eprintln!("\n  Unpacking ..."),
-            })?;
+            let rt = wine_builds::install(&ww.paths, &build, install_progress)?;
             println!("Installed {:?} at {}", rt.name, rt.root.display());
             if system::needs_rosetta() {
                 println!(
@@ -452,10 +449,14 @@ fn create_bottle(ww: &WineWrap, runner: &Runner, cfg: BottleConfig) -> Result<Bo
 fn steam_cmd(ww: &WineWrap, runner: &Runner, cmd: SteamCmd) -> Result<()> {
     match cmd {
         SteamCmd::Install { bottle } => {
-            let b = match ww.bottle(&bottle) {
+            let mut b = match ww.bottle(&bottle) {
                 Ok(b) => b,
                 Err(winewrap_core::Error::BottleNotFound(_)) => {
-                    create_bottle(ww, runner, BottleConfig::new(&bottle))?
+                    let mut config = BottleConfig::new(&bottle);
+                    if !runner.dry_run {
+                        ww.use_steam_runtime(&mut config, install_progress)?;
+                    }
+                    create_bottle(ww, runner, config)?
                 }
                 Err(e) => return Err(e.into()),
             };
@@ -463,6 +464,7 @@ fn steam_cmd(ww: &WineWrap, runner: &Runner, cmd: SteamCmd) -> Result<()> {
                 println!("Steam is already installed in {bottle:?}.");
                 return Ok(());
             }
+            use_steam_runtime(ww, runner, &mut b)?;
             let rt = ww.runtime_for(&b)?;
             let setup = if runner.dry_run {
                 ww.paths.downloads_dir().join(steam::STEAM_SETUP_FILE)
@@ -483,8 +485,7 @@ fn steam_cmd(ww: &WineWrap, runner: &Runner, cmd: SteamCmd) -> Result<()> {
             }
         }
         SteamCmd::Launch { bottle } => {
-            let (b, rt) = open_bottle(ww, &bottle)?;
-            ensure_steam(&b)?;
+            let (b, rt) = open_steam_bottle(ww, runner, &bottle)?;
             runner.spawn(
                 ww,
                 &steam::launch_command(&b, &rt),
@@ -508,8 +509,7 @@ fn steam_cmd(ww: &WineWrap, runner: &Runner, cmd: SteamCmd) -> Result<()> {
             }
         }
         SteamCmd::Play { app_id, bottle } => {
-            let (b, rt) = open_bottle(ww, &bottle)?;
-            ensure_steam(&b)?;
+            let (b, rt) = open_steam_bottle(ww, runner, &bottle)?;
             runner.spawn(
                 ww,
                 &steam::play_command(&b, &rt, app_id),
@@ -518,6 +518,41 @@ fn steam_cmd(ww: &WineWrap, runner: &Runner, cmd: SteamCmd) -> Result<()> {
         }
     }
     Ok(())
+}
+
+/// Open a bottle that has Steam, moving it to WineWrap's Wine build first if
+/// it needs that (see [`steam::needs_winewrap_runtime`]).
+fn open_steam_bottle(
+    ww: &WineWrap,
+    runner: &Runner,
+    name: &str,
+) -> Result<(Bottle, winewrap_core::WineRuntime)> {
+    let mut b = ww.bottle(name)?;
+    ensure_steam(&b)?;
+    use_steam_runtime(ww, runner, &mut b)?;
+    open_bottle(ww, name)
+}
+
+fn use_steam_runtime(ww: &WineWrap, runner: &Runner, b: &mut Bottle) -> Result<()> {
+    if runner.dry_run || !steam::needs_winewrap_runtime(&b.config) {
+        return Ok(());
+    }
+    if ww.use_steam_runtime(&mut b.config, install_progress)? {
+        b.save()?;
+        println!(
+            "{:?} now uses WineWrap's Wine ({}): Steam's window stays black with other builds.",
+            b.name(),
+            b.config.runtime.as_deref().unwrap_or_default()
+        );
+    }
+    Ok(())
+}
+
+fn install_progress(p: InstallProgress) {
+    match p {
+        InstallProgress::Downloading { done, total } => progress_bar(done, total),
+        InstallProgress::Extracting => eprintln!("\n  Unpacking ..."),
+    }
 }
 
 fn ensure_steam(b: &Bottle) -> Result<()> {
