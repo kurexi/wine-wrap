@@ -6,6 +6,21 @@ use std::path::Path;
 
 use crate::error::{Error, IoContext, Result};
 
+/// HTTP client for all downloads. It trusts the operating system's certificate
+/// store (the macOS Keychain), like other Mac apps do, so downloads also work
+/// behind company proxies and VPNs that use their own root certificates.
+pub fn agent() -> ureq::Agent {
+    use ureq::tls::{RootCerts, TlsConfig};
+    ureq::Agent::config_builder()
+        .tls_config(
+            TlsConfig::builder()
+                .root_certs(RootCerts::PlatformVerifier)
+                .build(),
+        )
+        .build()
+        .into()
+}
+
 /// Download `url` to `dest`. The data is written to a `.part` file first and
 /// renamed on success, so an interrupted download never looks complete.
 ///
@@ -20,7 +35,7 @@ pub fn download(url: &str, dest: &Path, mut progress: impl FnMut(u64, Option<u64
         std::fs::create_dir_all(parent).at(parent)?;
     }
 
-    let mut response = ureq::get(url).call().map_err(|e| fail(e.to_string()))?;
+    let mut response = agent().get(url).call().map_err(|e| fail(e.to_string()))?;
     let total = response.body().content_length();
     let mut reader = response.body_mut().as_reader();
 

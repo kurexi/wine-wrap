@@ -2,6 +2,8 @@ use std::path::{Path, PathBuf};
 
 use eframe::egui;
 use winewrap_core::steam::{self, SteamGame};
+use winewrap_core::system;
+use winewrap_core::wine_builds::{self, InstallProgress, WineFlavor};
 use winewrap_core::{
     Bottle, BottleConfig, GraphicsBackend, LaunchSpec, SyncMode, WindowsVersion, WineRuntime,
     WineWrap,
@@ -24,6 +26,9 @@ pub struct WineWrapApp {
     jobs: Jobs,
     progress: Option<Option<f32>>,
     log: Vec<String>,
+    /// Release line offered by the "Install Wine" button.
+    wine_flavor: WineFlavor,
+    needs_rosetta: bool,
 }
 
 /// State of the "New bottle" dialog.
@@ -46,6 +51,8 @@ impl WineWrapApp {
             jobs: Jobs::new(),
             progress: None,
             log: Vec::new(),
+            wine_flavor: WineFlavor::default(),
+            needs_rosetta: false,
         };
         match WineWrap::open() {
             Ok(ww) => app.ww = Some(ww),
@@ -53,7 +60,7 @@ impl WineWrapApp {
         }
         app.reload();
         if app.runtimes.is_empty() {
-            app.push_log("No Wine runtime found. Install one, e.g. `brew install --cask --no-quarantine gcenx/wine/wine-crossover`, then restart.");
+            app.push_log("No Wine runtime found. Click “Install Wine” to download it.");
         }
         app.selected = app.bottles.first().map(|b| b.name().to_string());
         app.select_changed();
@@ -71,6 +78,7 @@ impl WineWrapApp {
 
     /// Re-read bottles and runtimes from disk.
     fn reload(&mut self) {
+        self.needs_rosetta = system::needs_rosetta();
         let Some(ww) = &self.ww else { return };
         self.runtimes = ww.runtimes();
         match ww.bottles() {
@@ -251,6 +259,72 @@ impl WineWrapApp {
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default();
         self.spawn(spec, &format!("{}-{label}", bottle.name()));
+    }
+
+    fn handle_wine_actions(&mut self, ctx: &egui::Context, actions: WineActions) {
+        if actions.install {
+            self.install_wine(ctx);
+        }
+        if actions.install_rosetta {
+            self.jobs.spawn(ctx, "Install Rosetta 2", |r| {
+                r.log("Installing Rosetta 2 (macOS will ask for your password) …");
+                system::rosetta_install_command().run()
+            });
+        }
+        if actions.rescan {
+            self.reload();
+            let n = self.runtimes.len();
+            self.push_log(format!("Rescanned: found {n} Wine runtime(s)"));
+        }
+        if actions.add {
+            self.add_runtime_dialog();
+        }
+    }
+
+    /// Download and install the latest Wine build of the chosen flavor.
+    fn install_wine(&mut self, ctx: &egui::Context) {
+        let Some(ww) = self.ww.clone() else { return };
+        let flavor = self.wine_flavor;
+        self.jobs
+            .spawn(ctx, format!("Install Wine ({flavor})"), move |r| {
+                r.log(format!("Looking up the latest Wine {flavor} build …"));
+                let build = wine_builds::latest_build(flavor)?;
+                r.log(format!(
+                    "Downloading {} ({:.0} MB) …",
+                    build.runtime_name(),
+                    build.size as f64 / 1_000_000.0
+                ));
+                let rt = wine_builds::install(&ww.paths, &build, |p| match p {
+                    InstallProgress::Downloading { done, total } => {
+                        r.progress(total.filter(|&t| t > 0).map(|t| done as f32 / t as f32))
+                    }
+                    InstallProgress::Extracting => {
+                        r.progress(None);
+                        r.log("Unpacking Wine …");
+                    }
+                })?;
+                r.log(format!("Wine is ready: {}", rt.name));
+                Ok(())
+            });
+    }
+
+    /// Let the user point at a Wine installation that was not auto-detected.
+    fn add_runtime_dialog(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .set_title("Choose a Wine installation (the folder that contains bin/wine)")
+            .pick_folder()
+        else {
+            return;
+        };
+        let Some(ww) = self.ww.as_mut() else { return };
+        match ww.add_runtime_from_path(&path) {
+            Ok(rt) => {
+                let msg = format!("Added Wine runtime {:?} ({})", rt.name, rt.root.display());
+                self.push_log(msg);
+                self.reload();
+            }
+            Err(e) => self.push_log(format!("Could not add {}: {e}", path.display())),
+        }
     }
 
     // ---- UI -------------------------------------------------------------
@@ -482,11 +556,25 @@ impl WineWrapApp {
         let mut cancel = false;
         let name_ok = winewrap_core::bottle::validate_name(&nb.config.name).is_ok()
             && !self.bottles.iter().any(|b| b.name() == nb.config.name);
+        let disabled_reason = if runtimes.is_empty() {
+            Some("Install Wine first (see above)")
+        } else if !name_ok {
+            Some("Choose a unique bottle name")
+        } else {
+            None
+        };
+        let mut wine_actions = WineActions::default();
+        let mut flavor = self.wine_flavor;
+        let busy = self.jobs.is_busy();
 
         let modal = egui::Modal::new(egui::Id::unique("new_bottle")).show(ctx, |ui| {
             ui.set_width(380.0);
             ui.heading("New bottle");
             ui.add_space(6.0);
+            if runtimes.is_empty() {
+                wine_actions = missing_wine_box(ui, &mut flavor, busy);
+                ui.add_space(6.0);
+            }
             ui.horizontal(|ui| {
                 ui.label("Name");
                 ui.text_edit_singleline(&mut nb.config.name);
@@ -502,7 +590,8 @@ impl WineWrapApp {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 if ui
-                    .add_enabled(name_ok && !runtimes.is_empty(), egui::Button::new("Create"))
+                    .add_enabled(disabled_reason.is_none(), egui::Button::new("Create"))
+                    .on_disabled_hover_text(disabled_reason.unwrap_or_default())
                     .clicked()
                 {
                     create = true;
@@ -510,8 +599,13 @@ impl WineWrapApp {
                 if ui.button("Cancel").clicked() {
                     cancel = true;
                 }
+                if let Some(reason) = disabled_reason {
+                    ui.weak(reason);
+                }
             });
         });
+        self.wine_flavor = flavor;
+        self.handle_wine_actions(ctx, wine_actions);
         if cancel || modal.should_close() {
             self.new_bottle = None;
         } else if create {
@@ -534,7 +628,11 @@ impl WineWrapApp {
                     );
                 }
             } else {
-                ui.weak(format!("{} runtime(s) available", self.runtimes.len()));
+                ui.weak(format!("{} Wine runtime(s)", self.runtimes.len()));
+                if let Some(last) = self.log.last() {
+                    ui.separator();
+                    ui.weak(last);
+                }
             }
         });
         egui::CollapsingHeader::new("Activity")
@@ -562,10 +660,100 @@ impl eframe::App for WineWrapApp {
             .resizable(true)
             .default_size(200.0)
             .show(ui, |ui| self.sidebar(ui));
-        egui::CentralPanel::default_margins().show(ui, |ui| self.bottle_view(ui));
+        egui::CentralPanel::default_margins().show(ui, |ui| {
+            let busy = self.jobs.is_busy();
+            let mut actions = WineActions::default();
+            if self.needs_rosetta {
+                actions.install_rosetta = rosetta_box(ui, busy);
+                ui.add_space(8.0);
+            }
+            if self.runtimes.is_empty() && self.new_bottle.is_none() {
+                let wine = missing_wine_box(ui, &mut self.wine_flavor, busy);
+                actions.install = wine.install;
+                actions.rescan = wine.rescan;
+                actions.add = wine.add;
+                ui.add_space(8.0);
+            }
+            self.handle_wine_actions(&ctx, actions);
+            self.bottle_view(ui);
+        });
 
         self.new_bottle_dialog(&ctx);
     }
+}
+
+/// Buttons pressed in [`missing_wine_box`] / [`rosetta_box`].
+#[derive(Default)]
+struct WineActions {
+    install: bool,
+    install_rosetta: bool,
+    rescan: bool,
+    add: bool,
+}
+
+/// Explains that Wine is missing and offers to install it.
+fn missing_wine_box(ui: &mut egui::Ui, flavor: &mut WineFlavor, busy: bool) -> WineActions {
+    let mut actions = WineActions::default();
+    egui::Frame::group(ui.style()).show(ui, |ui| {
+        ui.colored_label(
+            ui.visuals().warn_fg_color,
+            egui::RichText::new("⚠ Wine is not installed").strong(),
+        );
+        ui.label(
+            "WineWrap runs Windows programs with Wine. It can download and install \
+             Wine for you (a few hundred MB; no Homebrew or Terminal needed).",
+        );
+        ui.horizontal(|ui| {
+            actions.install = ui
+                .add_enabled(!busy, egui::Button::new("⬇ Install Wine"))
+                .on_disabled_hover_text("Wait for the current task to finish")
+                .clicked();
+            egui::ComboBox::from_id_salt("wine_flavor")
+                .selected_text(flavor.to_string())
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(flavor, WineFlavor::Stable, "stable (recommended)");
+                    ui.selectable_value(flavor, WineFlavor::Devel, "devel (newer)");
+                    ui.selectable_value(
+                        flavor,
+                        WineFlavor::Staging,
+                        "staging (newer + extra patches)",
+                    );
+                });
+        });
+        ui.add_space(4.0);
+        ui.horizontal_wrapped(|ui| {
+            ui.weak("Already have Wine somewhere else?");
+            actions.rescan = ui.small_button("⟳ Rescan").clicked();
+            actions.add = ui
+                .small_button("Add Wine folder…")
+                .on_hover_text("Choose a Wine installation folder (the one containing bin/wine)")
+                .clicked();
+        });
+        ui.horizontal_wrapped(|ui| {
+            ui.weak("Wine builds come from");
+            ui.hyperlink_to("Gcenx/macOS_Wine_builds", wine_builds::BUILDS_URL);
+        });
+    });
+    actions
+}
+
+/// Explains that Rosetta 2 is missing (Apple Silicon) and offers to install it.
+fn rosetta_box(ui: &mut egui::Ui, busy: bool) -> bool {
+    let mut install = false;
+    egui::Frame::group(ui.style()).show(ui, |ui| {
+        ui.colored_label(
+            ui.visuals().warn_fg_color,
+            egui::RichText::new("⚠ Rosetta 2 is not installed").strong(),
+        );
+        ui.label(
+            "Wine is an Intel (x86_64) program, so on Apple Silicon Macs it needs \
+             Apple's Rosetta 2. macOS will ask for your password to install it.",
+        );
+        install = ui
+            .add_enabled(!busy, egui::Button::new("Install Rosetta 2"))
+            .clicked();
+    });
+    install
 }
 
 /// Shared settings widgets for the new-bottle dialog and the settings panel.

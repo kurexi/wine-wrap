@@ -33,6 +33,21 @@ pub fn rosetta_installed() -> bool {
     Path::new("/Library/Apple/usr/libexec/oah/libRosettaRuntime").exists()
 }
 
+/// Whether this Mac needs Rosetta 2 installed before Wine can run.
+pub fn needs_rosetta() -> bool {
+    cfg!(all(target_os = "macos", target_arch = "aarch64")) && !rosetta_installed()
+}
+
+/// Install Rosetta 2. Runs through `osascript` so macOS shows its standard
+/// administrator password prompt; works from the GUI without a terminal.
+pub fn rosetta_install_command() -> crate::launch::LaunchSpec {
+    crate::launch::LaunchSpec::new("/usr/bin/osascript").args([
+        "-e",
+        "do shell script \"/usr/sbin/softwareupdate --install-rosetta --agree-to-license\" \
+         with administrator privileges",
+    ])
+}
+
 /// Checks that only depend on the host, not on WineWrap's own state.
 pub fn host_checks() -> Vec<Check> {
     let mut checks = Vec::new();
@@ -56,7 +71,8 @@ pub fn host_checks() -> Vec<Check> {
             Check::new(
                 "Rosetta 2",
                 Status::Error,
-                "not installed; run `softwareupdate --install-rosetta --agree-to-license`",
+                "not installed; WineWrap can install it, or run \
+                 `softwareupdate --install-rosetta --agree-to-license`",
             )
         });
     }
