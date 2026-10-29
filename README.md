@@ -140,7 +140,26 @@ steam_args = []
 
 [env]
 # Extra environment variables for every process in the bottle.
+
+[drives]
+# Game folders outside the bottle, as Windows drive letters (D: to Y:):
+# d = "/Volumes/SSD/SteamLibrary"
 ```
+
+### Installing games on another disk
+
+In the app, open the bottle's settings, click **Game folders → Add folder…**,
+pick a folder (e.g. `/Volumes/SSD/SteamLibrary`) and Save. Or:
+
+```bash
+winewrap bottle set Steam drive.d /Volumes/SSD/SteamLibrary
+```
+
+Windows programs see the folder as a drive, and in a Steam bottle it becomes a
+Steam library the next time Steam starts, so it shows up in Steam's install
+dialog. The disk should be formatted APFS or Mac OS Extended: macOS can't
+write to NTFS, and exFAT works but is slower. While the disk is unplugged,
+Steam shows the games on it as not installed.
 
 ## Troubleshooting
 
