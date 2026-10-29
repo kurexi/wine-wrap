@@ -144,7 +144,11 @@ steam_args = []
 
 ## Troubleshooting
 
-* **Steam window is black or blank**: set `winewrap bottle set Steam steam_args "-cef-disable-gpu"` and relaunch.
+* **Steam window is black**: a known limitation of upstream Wine on macOS
+  (tested with 11.0 and 11.20). Steam's UI renders, but Chromium draws it from a
+  helper process into a window another process owns, and Wine's macOS driver
+  doesn't show that. Steam arguments such as `-cef-disable-gpu` don't help.
+  CrossOver's Wine has the needed patches.
 * **A game says your CPU lacks AVX**: on macOS 15 or later, enable `advertise_avx`.
 * **Nothing happens on launch**: check the newest file in the logs directory, or
   run the command printed by `--dry-run` yourself with `WINEDEBUG=+err` set.

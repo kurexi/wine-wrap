@@ -5,7 +5,7 @@ use std::ffi::OsString;
 use std::fmt;
 use std::fs::File;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::bottle::{Bottle, GraphicsBackend, SyncMode};
@@ -85,12 +85,17 @@ impl LaunchSpec {
         cmd
     }
 
+    /// Run to completion and return the exit status; only failing to start
+    /// is an error.
+    pub fn status(&self) -> Result<ExitStatus> {
+        self.to_command()
+            .status()
+            .map_err(|e| self.command_error(e.to_string()))
+    }
+
     /// Run to completion, failing on a non-zero exit status.
     pub fn run(&self) -> Result<()> {
-        let status = self
-            .to_command()
-            .status()
-            .map_err(|e| self.command_error(e.to_string()))?;
+        let status = self.status()?;
         if status.success() {
             Ok(())
         } else {
@@ -129,7 +134,7 @@ impl LaunchSpec {
         Ok((child, log_path))
     }
 
-    fn command_error(&self, message: String) -> Error {
+    pub(crate) fn command_error(&self, message: String) -> Error {
         Error::Command {
             command: self.to_string(),
             message,

@@ -240,7 +240,13 @@ fn run(cli: Cli) -> Result<()> {
         }
         Command::Kill { bottle } => {
             let (b, rt) = open_bottle(&ww, &bottle)?;
-            runner.run(&b.kill_command(&rt))
+            if runner.dry_run {
+                return runner.run(&b.kill_command(&rt));
+            }
+            if !b.kill(&rt)? {
+                println!("Nothing is running in {bottle}.");
+            }
+            Ok(())
         }
     }
 }

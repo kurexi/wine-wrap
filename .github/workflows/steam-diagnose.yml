@@ -8,10 +8,6 @@ name: Steam diagnose
 # and release files don't use Actions artifact storage).
 on:
   workflow_dispatch:
-  # TEMPORARY: run while investigating on this branch (dispatching needs the
-  # workflow on master first). Remove before merging.
-  push:
-    branches: [claude/steam-black-window]
 
 permissions:
   contents: read
