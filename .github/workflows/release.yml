@@ -45,6 +45,10 @@ jobs:
     name: CI
     needs: verify
     uses: ./.github/workflows/ci.yml
+    # ci.yml's package job declares contents: write (it is skipped here, but
+    # a called workflow may not request more than the caller grants).
+    permissions:
+      contents: write
     with:
       skip_package: true
 

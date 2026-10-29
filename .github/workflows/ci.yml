@@ -5,6 +5,11 @@ on:
     branches: [master]
   pull_request:
   workflow_dispatch:
+    inputs:
+      publish_prerelease:
+        description: Also publish the unsigned build as the "dev-unsigned" GitHub pre-release
+        type: boolean
+        default: false
   # Lets the release workflow run the same checks before publishing.
   workflow_call:
     inputs:
@@ -116,6 +121,9 @@ jobs:
     # (A missing input is null, and !null is true, so other events still package.)
     if: ${{ !inputs.skip_package }}
     runs-on: macos-latest
+    permissions:
+      # Only used by the opt-in pre-release step on manual runs.
+      contents: write
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -127,12 +135,6 @@ jobs:
           VERSION: 0.0.0-ci.${{ github.run_number }}
           BUILD_NUMBER: ${{ github.run_number }}
         run: scripts/package-macos.sh universal
-      - uses: actions/upload-artifact@v4
-        with:
-          name: winewrap-macos-unsigned
-          path: dist/*
-          if-no-files-found: error
-          retention-days: 14
       - name: Smoke-test the packaged app
         env:
           WINEWRAP_HOME: ${{ runner.temp }}/winewrap-home
@@ -146,24 +148,38 @@ jobs:
           "$app/Contents/MacOS/winewrap" --version
           "$app/Contents/MacOS/winewrap" bottle list
 
-          # Launch the GUI and make sure it stays up and draws a window.
+          # Launch the GUI and make sure it stays up and opens a window.
           "$app/Contents/MacOS/WineWrap" > "$RUNNER_TEMP/gui.log" 2>&1 &
           pid=$!
           sleep 20
-          screencapture -x "$RUNNER_TEMP/screenshot.png" || echo "screencapture unavailable"
+          status=0
           if ! kill -0 "$pid" 2>/dev/null; then
             echo "::error::WineWrap exited during startup"
-            cat "$RUNNER_TEMP/gui.log"
-            exit 1
+            status=1
+          elif ! swift scripts/check-window.swift "$pid"; then
+            echo "::error::WineWrap is running but has no window on screen"
+            status=1
           fi
-          kill "$pid"
+          kill "$pid" 2>/dev/null || true
+          echo "--- GUI log ---"
           cat "$RUNNER_TEMP/gui.log"
+          exit "$status"
       - uses: actions/upload-artifact@v4
-        if: always()
+        # Artifact storage can run out at the account level; the build has
+        # already been verified above, so don't fail the job over it.
+        continue-on-error: true
         with:
-          name: gui-smoke-test
-          path: |
-            ${{ runner.temp }}/screenshot.png
-            ${{ runner.temp }}/gui.log
-          if-no-files-found: ignore
-          retention-days: 7
+          name: winewrap-macos-unsigned
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 14
+      - name: Publish "dev-unsigned" pre-release
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes="Unsigned (ad-hoc signed) development build of ${GITHUB_SHA::7} from ${GITHUB_REF_NAME}.
+          See the README section \"Running an unsigned build\" before opening it."
+          gh release delete dev-unsigned --yes --cleanup-tag || true
+          gh release create dev-unsigned dist/* --prerelease --target "$GITHUB_SHA" \
+            --title "Development build (unsigned)" --notes "$notes"

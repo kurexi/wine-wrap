@@ -52,6 +52,8 @@ scripts/package-macos.sh native     # current architecture only, faster
 Prebuilt downloads are attached to each
 [GitHub release](https://github.com/hashspace-apps/wine-wrap/releases). Every CI
 run also uploads a `winewrap-macos-unsigned` artifact (Actions → CI → a run → Artifacts).
+To publish a build as the rolling `dev-unsigned` pre-release instead, run the CI
+workflow manually (Actions → CI → Run workflow) with **publish_prerelease** ticked.
 
 ### Running an unsigned build
 
