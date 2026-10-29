@@ -253,14 +253,18 @@ mod tests {
     #[test]
     fn runtime_registration_and_resolution() {
         let (mut ww, d) = setup();
-        let root = d.path().join("my-wine");
+        let root = crate::runtime::tests::symlinked_dir(d.path()).join("my-wine");
         crate::runtime::tests::fake_runtime(&root, "wine");
         ww.add_runtime("mine", &root).unwrap();
         ww.set_default_runtime("mine").unwrap();
 
         // Reload from disk to make sure it persisted.
         let mut ww = WineWrap::with_paths(ww.paths.clone()).unwrap();
-        assert_eq!(ww.default_runtime().unwrap().root, root);
+        // Roots are resolved through symlinks (macOS: /var -> /private/var).
+        assert_eq!(
+            ww.default_runtime().unwrap().root,
+            std::fs::canonicalize(&root).unwrap()
+        );
 
         let b = ww.create_bottle(BottleConfig::new("b")).unwrap();
         assert_eq!(ww.runtime_for(&b).unwrap().name, "mine");

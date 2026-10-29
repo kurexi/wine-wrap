@@ -325,6 +325,21 @@ fn collect(candidates: impl Iterator<Item = Candidate>) -> Vec<WineRuntime> {
 pub(crate) mod tests {
     use super::*;
 
+    /// A directory reached through a symlink, like macOS temp dirs
+    /// (`/var` -> `/private/var`), so tests on Linux see the same paths.
+    pub(crate) fn symlinked_dir(base: &Path) -> PathBuf {
+        let real = base.join("real");
+        std::fs::create_dir_all(&real).unwrap();
+        #[cfg(unix)]
+        {
+            let link = base.join("link");
+            std::os::unix::fs::symlink(&real, &link).unwrap();
+            link
+        }
+        #[cfg(not(unix))]
+        real
+    }
+
     /// Create a fake Wine install prefix for tests.
     pub(crate) fn fake_runtime(root: &Path, binary: &str) {
         std::fs::create_dir_all(root.join("bin")).unwrap();
@@ -440,7 +455,8 @@ pub(crate) mod tests {
     #[test]
     fn discovers_custom_and_managed_without_duplicates() {
         let dir = tempfile::tempdir().unwrap();
-        let managed = dir.path().join("runtimes");
+        let base = symlinked_dir(dir.path());
+        let managed = base.join("runtimes");
         fake_runtime(&managed.join("wine-10"), "wine");
         std::fs::create_dir_all(managed.join("empty")).unwrap();
 
@@ -451,13 +467,17 @@ pub(crate) mod tests {
             },
             CustomRuntime {
                 name: "broken".into(),
-                path: dir.path().join("missing"),
+                path: base.join("missing"),
             },
         ];
         let found = discover(&custom, &managed);
         let ours: Vec<_> = found
             .iter()
-            .filter(|r| r.root.starts_with(dir.path()))
+            // Roots are resolved through symlinks.
+            .filter(|r| {
+                r.root
+                    .starts_with(std::fs::canonicalize(dir.path()).unwrap())
+            })
             .collect();
         assert_eq!(ours.len(), 1);
         assert_eq!(ours[0].name, "mine");
