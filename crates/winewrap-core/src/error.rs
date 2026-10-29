@@ -31,7 +31,7 @@ pub enum Error {
     #[error("Wine runtime {0:?} not found")]
     RuntimeNotFound(String),
 
-    #[error("no Wine runtime found; install one (e.g. `brew install --cask --no-quarantine gcenx/wine/wine-crossover`) or register one with `winewrap runtime add`")]
+    #[error("no Wine runtime found; install one (e.g. `brew install --cask gcenx/wine/wine-crossover`, or a build from https://github.com/Gcenx/macOS_Wine_builds/releases into /Applications) or register one with `winewrap runtime add <name> <path>`")]
     NoRuntime,
 
     #[error("{0} is not a Wine installation (no bin/wine or bin/wine64 found)")]

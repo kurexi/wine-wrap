@@ -14,7 +14,12 @@ toml.workspace = true
 thiserror.workspace = true
 directories.workspace = true
 ureq.workspace = true
+serde_json.workspace = true
+tar.workspace = true
+lzma-rust2.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+# The encoder builds .tar.xz fixtures for wine_builds tests.
+lzma-rust2 = { workspace = true, features = ["encoder"] }

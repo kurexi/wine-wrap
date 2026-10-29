@@ -67,6 +67,22 @@ impl WineWrap {
         Ok(rt)
     }
 
+    /// Register a Wine installation the user picked, naming it after the
+    /// folder or `.app` (with a numeric suffix if that name is taken).
+    pub fn add_runtime_from_path(&mut self, path: &Path) -> Result<WineRuntime> {
+        let base = path
+            .file_stem()
+            .map(|s| runtime::slug(&s.to_string_lossy()))
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "wine".into());
+        let taken: Vec<String> = self.runtimes().into_iter().map(|r| r.name).collect();
+        let name = std::iter::once(base.clone())
+            .chain((2..).map(|i| format!("{base}-{i}")))
+            .find(|n| !taken.contains(n))
+            .expect("an unused name always exists");
+        self.add_runtime(&name, path)
+    }
+
     pub fn remove_runtime(&mut self, name: &str) -> Result<()> {
         let before = self.config.runtimes.len();
         self.config.runtimes.retain(|r| r.name != name);
@@ -222,16 +238,33 @@ mod tests {
     }
 
     #[test]
+    fn add_runtime_from_path_names_uniquely() {
+        let (mut ww, d) = setup();
+        let a = d.path().join("a/My Wine.app");
+        let b = d.path().join("b/My Wine.app");
+        crate::runtime::tests::fake_runtime(&a.join("Contents/Resources/wine"), "wine");
+        crate::runtime::tests::fake_runtime(&b.join("Contents/Resources/wine"), "wine");
+        assert_eq!(ww.add_runtime_from_path(&a).unwrap().name, "my-wine");
+        assert_eq!(ww.add_runtime_from_path(&b).unwrap().name, "my-wine-2");
+        assert!(ww.add_runtime_from_path(d.path()).is_err());
+        assert_eq!(ww.config.runtimes.len(), 2);
+    }
+
+    #[test]
     fn runtime_registration_and_resolution() {
         let (mut ww, d) = setup();
-        let root = d.path().join("my-wine");
+        let root = crate::runtime::tests::symlinked_dir(d.path()).join("my-wine");
         crate::runtime::tests::fake_runtime(&root, "wine");
         ww.add_runtime("mine", &root).unwrap();
         ww.set_default_runtime("mine").unwrap();
 
         // Reload from disk to make sure it persisted.
         let mut ww = WineWrap::with_paths(ww.paths.clone()).unwrap();
-        assert_eq!(ww.default_runtime().unwrap().root, root);
+        // Roots are resolved through symlinks (macOS: /var -> /private/var).
+        assert_eq!(
+            ww.default_runtime().unwrap().root,
+            std::fs::canonicalize(&root).unwrap()
+        );
 
         let b = ww.create_bottle(BottleConfig::new("b")).unwrap();
         assert_eq!(ww.runtime_for(&b).unwrap().name, "mine");

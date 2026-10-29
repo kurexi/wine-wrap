@@ -8,6 +8,7 @@
 //! * [`launch`]: turning a bottle + runtime + program into a process with the
 //!   right environment.
 //! * [`steam`]: installing and launching Steam and listing installed games.
+//! * [`wine_builds`]: downloading and installing Wine without Homebrew.
 //! * [`system`]: host health checks (Rosetta 2, architecture, …).
 //!
 //! Most operations are expressed as [`launch::LaunchSpec`] values first and only
@@ -24,6 +25,7 @@ pub mod runtime;
 pub mod steam;
 pub mod system;
 pub mod vdf;
+pub mod wine_builds;
 
 mod manager;
 

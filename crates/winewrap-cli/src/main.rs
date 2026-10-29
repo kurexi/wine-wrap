@@ -5,7 +5,8 @@ use std::path::PathBuf;
 
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
-use winewrap_core::system::Status;
+use winewrap_core::system::{self, Status};
+use winewrap_core::wine_builds::{self, InstallProgress, WineFlavor};
 use winewrap_core::{
     steam, Bottle, BottleConfig, GraphicsBackend, LaunchSpec, SyncMode, WindowsVersion, WineWrap,
 };
@@ -64,7 +65,13 @@ enum Command {
 enum RuntimeCmd {
     /// List detected and registered Wine runtimes.
     List,
-    /// Register a Wine installation (the directory that contains bin/wine).
+    /// Download and install Wine for you (no Homebrew needed).
+    Install {
+        /// Release line: stable, devel or staging.
+        #[arg(default_value_t = WineFlavor::default())]
+        flavor: WineFlavor,
+    },
+    /// Register a Wine installation (a folder containing bin/wine, or a Wine .app).
     Add { name: String, path: PathBuf },
     /// Unregister a runtime added with `add`.
     Remove { name: String },
@@ -284,6 +291,26 @@ fn runtime(ww: &mut WineWrap, cmd: RuntimeCmd) -> Result<()> {
                     rt.name,
                     rt.kind,
                     rt.root.display()
+                );
+            }
+        }
+        RuntimeCmd::Install { flavor } => {
+            println!("Looking up the latest Wine {flavor} build ...");
+            let build = wine_builds::latest_build(flavor)?;
+            println!(
+                "Installing {} ({:.0} MiB download) ...",
+                build.runtime_name(),
+                build.size as f64 / 1_048_576.0
+            );
+            let rt = wine_builds::install(&ww.paths, &build, |p| match p {
+                InstallProgress::Downloading { done, total } => progress_bar(done, total),
+                InstallProgress::Extracting => eprintln!("\n  Unpacking ..."),
+            })?;
+            println!("Installed {:?} at {}", rt.name, rt.root.display());
+            if system::needs_rosetta() {
+                println!(
+                    "Wine needs Rosetta 2 on Apple Silicon. Install it with:\n  \
+                     softwareupdate --install-rosetta --agree-to-license"
                 );
             }
         }

@@ -2,16 +2,21 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [master]
   pull_request:
   workflow_dispatch:
+    inputs:
+      publish_prerelease:
+        description: Publish the unsigned build as the "dev-unsigned" GitHub pre-release
+        type: boolean
+        default: true
   # Lets the release workflow run the same checks before publishing.
   workflow_call:
     inputs:
-      package:
-        description: Build the macOS package job
+      skip_package:
+        description: Skip the macOS package job
         type: boolean
-        default: true
+        default: false
 
 permissions:
   contents: read
@@ -109,12 +114,41 @@ jobs:
         with:
           command: check
 
+  e2e:
+    name: End-to-end on macOS (install Wine, create a bottle)
+    needs: [test]
+    runs-on: macos-latest
+    timeout-minutes: 30
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      # (The runner context isn't available in job-level env.)
+      - run: echo "WINEWRAP_HOME=$RUNNER_TEMP/winewrap-home" >> "$GITHUB_ENV"
+      - run: cargo build --locked -p winewrap-cli
+      - name: Install Wine with WineWrap (no Homebrew)
+        run: target/debug/winewrap runtime install stable
+      - run: target/debug/winewrap runtime list
+      - name: Create a bottle
+        run: target/debug/winewrap -v bottle create E2E
+      - name: Check the bottle
+        run: |
+          target/debug/winewrap bottle list
+          test -f "$WINEWRAP_HOME/data/bottles/E2E/system.reg"
+          target/debug/winewrap kill E2E || true
+
   package:
     name: Package macOS app
     needs: [clippy, test]
     # Skipped when the release workflow calls CI, since it packages on its own.
-    if: inputs.package != false
+    # (A missing input is null, and !null is true, so other events still package.)
+    if: ${{ !inputs.skip_package }}
     runs-on: macos-latest
+    permissions:
+      # Needed to publish the dev-unsigned pre-release.
+      contents: write
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
@@ -126,14 +160,63 @@ jobs:
           VERSION: 0.0.0-ci.${{ github.run_number }}
           BUILD_NUMBER: ${{ github.run_number }}
         run: scripts/package-macos.sh universal
-      - name: Verify the bundle runs
+      - name: Smoke-test the packaged app
+        timeout-minutes: 10
+        env:
+          WINEWRAP_HOME: ${{ runner.temp }}/winewrap-home
         run: |
           hdiutil attach dist/*.dmg -mountpoint /tmp/winewrap-dmg -nobrowse
-          /tmp/winewrap-dmg/WineWrap.app/Contents/MacOS/winewrap --version
+          cp -R /tmp/winewrap-dmg/WineWrap.app "$RUNNER_TEMP/"
           hdiutil detach /tmp/winewrap-dmg
-      - uses: actions/upload-artifact@v4
-        with:
-          name: winewrap-macos-${{ github.sha }}
-          path: dist/*
-          if-no-files-found: error
-          retention-days: 14
+          app="$RUNNER_TEMP/WineWrap.app"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          cli="$app/Contents/Helpers/winewrap"
+          lipo -archs "$app/Contents/MacOS/WineWrap"
+          lipo -archs "$cli"
+          # perl's alarm stands in for `timeout`, which macOS lacks; a GUI
+          # binary in the CLI's place would otherwise hang here.
+          version="$(perl -e 'alarm 30; exec @ARGV' "$cli" --version)"
+          echo "$version"
+          [[ "$version" == winewrap* ]] || { echo "::error::bundled CLI is not winewrap"; exit 1; }
+          perl -e 'alarm 30; exec @ARGV' "$cli" bottle list
+
+          # The CLI tarball must contain the CLI too.
+          mkdir "$RUNNER_TEMP/cli" && tar -xzf dist/winewrap-*.tar.gz -C "$RUNNER_TEMP/cli"
+          perl -e 'alarm 30; exec @ARGV' "$RUNNER_TEMP"/cli/*/winewrap --version
+
+          # Launch the GUI and make sure it stays up and opens a window.
+          "$app/Contents/MacOS/WineWrap" > "$RUNNER_TEMP/gui.log" 2>&1 &
+          pid=$!
+          sleep 20
+          status=0
+          if ! kill -0 "$pid" 2>/dev/null; then
+            echo "::error::WineWrap exited during startup"
+            status=1
+          elif ! swift scripts/check-window.swift "$pid"; then
+            echo "::error::WineWrap is running but has no window on screen"
+            status=1
+          fi
+          kill "$pid" 2>/dev/null || true
+          echo "--- GUI log ---"
+          cat "$RUNNER_TEMP/gui.log"
+          exit "$status"
+      # Builds are delivered as GitHub release files rather than Actions
+      # artifacts: release files don't count against the account's (small)
+      # artifact storage quota. Every push to master and every manual run
+      # replaces the rolling "dev-unsigned" pre-release.
+      - name: Publish "dev-unsigned" pre-release
+        if: >-
+          (github.event_name == 'push' && github.ref == 'refs/heads/master') ||
+          (github.event_name == 'workflow_dispatch' && inputs.publish_prerelease)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes="Unsigned (ad-hoc signed) development build of ${GITHUB_SHA::7} from ${GITHUB_REF_NAME}.
+
+          Not notarized by Apple: after copying WineWrap.app to Applications, run
+          \`xattr -dr com.apple.quarantine /Applications/WineWrap.app\` once.
+          See the README section \"Running an unsigned build\"."
+          gh release delete dev-unsigned --yes --cleanup-tag || true
+          gh release create dev-unsigned dist/* --prerelease --target "$GITHUB_SHA" \
+            --title "Development build (unsigned)" --notes "$notes"
+          echo "### Download: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/dev-unsigned" >> "$GITHUB_STEP_SUMMARY"
