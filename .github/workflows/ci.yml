@@ -8,10 +8,10 @@ on:
   # Lets the release workflow run the same checks before publishing.
   workflow_call:
     inputs:
-      package:
-        description: Build the macOS package job
+      skip_package:
+        description: Skip the macOS package job
         type: boolean
-        default: true
+        default: false
 
 permissions:
   contents: read
@@ -113,7 +113,8 @@ jobs:
     name: Package macOS app
     needs: [clippy, test]
     # Skipped when the release workflow calls CI, since it packages on its own.
-    if: inputs.package != false
+    # (A missing input is null, and !null is true, so other events still package.)
+    if: ${{ !inputs.skip_package }}
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5

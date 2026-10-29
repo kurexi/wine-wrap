@@ -46,7 +46,7 @@ jobs:
     needs: verify
     uses: ./.github/workflows/ci.yml
     with:
-      package: false
+      skip_package: true
 
   macos:
     name: Build macOS
