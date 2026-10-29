@@ -25,7 +25,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       prerelease: ${{ steps.version.outputs.prerelease }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - id: version
         run: |
           manifest="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
@@ -53,7 +53,7 @@ jobs:
     needs: [verify, ci]
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin, x86_64-apple-darwin
@@ -97,7 +97,7 @@ jobs:
         if: always() && steps.signing.outputs.identity != ''
         run: security delete-keychain "$RUNNER_TEMP/signing.keychain-db" || true
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-macos
           path: dist/*
@@ -108,7 +108,7 @@ jobs:
     needs: [verify, ci]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - name: Build and package
         env:
@@ -120,7 +120,7 @@ jobs:
           cp target/release/winewrap README.md LICENSE "dist/$name/"
           tar -C dist -czf "dist/$name.tar.gz" "$name"
           rm -r "dist/$name"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-linux
           path: dist/*
@@ -133,7 +133,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: release-*
           path: dist
@@ -141,7 +141,7 @@ jobs:
       - name: Generate checksums
         working-directory: dist
         run: sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.TAG }}
           name: WineWrap ${{ needs.verify.outputs.version }}
