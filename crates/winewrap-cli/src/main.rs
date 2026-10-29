@@ -91,6 +91,8 @@ enum BottleCmd {
     Set {
         name: String,
         key: String,
+        /// May start with `-`, e.g. `steam_args "-cef-disable-gpu"`.
+        #[arg(allow_hyphen_values = true)]
         value: String,
     },
     /// Re-apply settings that live in the Wine registry (Windows version, Retina).
@@ -586,5 +588,19 @@ mod tests {
             Cli::try_parse_from(["winewrap", "bottle", "create", "x", "--graphics", "opengl"])
                 .is_err()
         );
+
+        let cli = Cli::try_parse_from([
+            "winewrap",
+            "bottle",
+            "set",
+            "Steam",
+            "steam_args",
+            "-cef-disable-gpu -cef-disable-gpu-compositing",
+        ])
+        .unwrap();
+        assert!(matches!(
+            cli.command,
+            Command::Bottle(BottleCmd::Set { ref value, .. }) if value.starts_with("-cef")
+        ));
     }
 }

@@ -1,0 +1,142 @@
+name: Steam diagnose
+
+# Manual tool for UI problems with the Steam client (e.g. a black window).
+# Each job installs Wine and Steam the way WineWrap does for users, applies
+# one rendering variant, launches Steam on a real Mac and reports how black
+# each window is, plus Steam's and Wine's logs. Window screenshots go to the
+# draft release "steam-diagnose" (drafts are only visible to collaborators,
+# and release files don't use Actions artifact storage).
+on:
+  workflow_dispatch:
+  # TEMPORARY: run while investigating on this branch (dispatching needs the
+  # workflow on master first). Remove before merging.
+  push:
+    branches: [claude/steam-black-window]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: steam-diagnose
+  cancel-in-progress: true
+
+jobs:
+  draft:
+    name: Prepare screenshot release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - run: |
+          gh release view steam-diagnose >/dev/null 2>&1 ||
+            gh release create steam-diagnose --draft --title "Steam diagnose screenshots" \
+              --notes "Screenshots from the Steam diagnose workflow (draft: collaborators only)."
+
+  steam:
+    name: Steam (${{ matrix.name }})
+    needs: draft
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: default
+            args: ""
+            renderer: ""
+          - name: cef-disable-gpu
+            args: "-cef-disable-gpu"
+            renderer: ""
+          - name: cef-disable-gpu-and-compositing
+            args: "-cef-disable-gpu -cef-disable-gpu-compositing"
+            renderer: ""
+          - name: wined3d-vulkan
+            args: ""
+            renderer: vulkan
+          - name: wined3d-vulkan-no-compositing
+            args: "-cef-disable-gpu-compositing"
+            renderer: vulkan
+    runs-on: macos-latest
+    timeout-minutes: 45
+    permissions:
+      contents: write # screenshots → draft release
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+      VARIANT: ${{ matrix.name }}
+      STEAM_ARGS: ${{ matrix.args }}
+      RENDERER: ${{ matrix.renderer }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Prepare
+        run: |
+          echo "WINEWRAP_HOME=$RUNNER_TEMP/winewrap-home" >> "$GITHUB_ENV"
+          echo "OUT=$RUNNER_TEMP/out" >> "$GITHUB_ENV"
+          echo "WW=$PWD/target/debug/winewrap" >> "$GITHUB_ENV"
+      - run: cargo build --locked -p winewrap-cli
+
+      - name: Install Wine and Steam
+        run: |
+          "$WW" runtime install stable
+          "$WW" steam install Steam
+
+      - name: Configure variant
+        run: |
+          # Keep Wine's error channel on so the logs say what failed.
+          "$WW" bottle set Steam env.WINEDEBUG "fixme-all"
+          if [[ -n "$STEAM_ARGS" ]]; then
+            "$WW" bottle set Steam steam_args "$STEAM_ARGS"
+          fi
+          if [[ -n "$RENDERER" ]]; then
+            "$WW" run --wait Steam reg add 'HKCU\Software\Wine\Direct3D' \
+              /v renderer /t REG_SZ /d "$RENDERER" /f
+          fi
+          "$WW" bottle show Steam
+
+      - name: Launch Steam and wait for its UI
+        run: |
+          "$WW" -v steam launch Steam
+          # On first launch Steam updates itself, restarts, then starts
+          # steamwebhelper (the Chromium process that draws the UI).
+          for i in $(seq 1 90); do
+            if pgrep -if steamwebhelper >/dev/null; then
+              echo "steamwebhelper running after $((i * 10))s"
+              break
+            fi
+            sleep 10
+          done
+          sleep 90
+
+      - name: Report
+        if: always()
+        run: |
+          mkdir -p "$OUT"
+          echo "===== windows ($VARIANT) ====="
+          swift scripts/window-stats.swift "$OUT" || true
+          screencapture -x "$OUT/screen.png" || true
+          echo "===== processes ====="
+          ps -axo pid,rss,command | grep -iE 'wine|steam' | grep -v grep | cut -c1-220 || true
+          steam="$WINEWRAP_HOME/data/bottles/Steam/drive_c/Program Files (x86)/Steam"
+          for f in "$steam"/logs/*.txt; do
+            [[ -f "$f" ]] || continue
+            echo "===== steam: $(basename "$f") ====="
+            tail -n 60 "$f"
+          done
+          for f in "$WINEWRAP_HOME"/data/logs/*.log; do
+            [[ -f "$f" ]] || continue
+            echo "===== wine: $(basename "$f") ====="
+            grep -v '^\[mvk-info\]' "$f" | tail -n 120
+          done
+
+      - name: Upload screenshots to the draft release
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          shopt -s nullglob
+          for f in "$OUT"/*.png; do
+            cp "$f" "$OUT/$VARIANT-$(basename "$f")"
+            gh release upload steam-diagnose "$OUT/$VARIANT-$(basename "$f")" --clobber || true
+          done
