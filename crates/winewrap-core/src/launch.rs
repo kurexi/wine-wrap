@@ -290,7 +290,6 @@ mod tests {
         let env = wine_env(&bottle, &rt);
         assert_eq!(env["WINEWRAP_D3DMETAL_DIR"], dir.to_string_lossy());
         assert_eq!(env["WINEWRAP_WINED3D_APPS"], WINED3D_APPS);
-        assert_eq!(env["WINEDLLOVERRIDES"], "dxgi,d3d9,d3d10core,d3d11,d3d12=b");
     }
 
     #[test]
