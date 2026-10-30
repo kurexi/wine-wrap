@@ -1,0 +1,85 @@
+server: Let a UDP socket bound to a local address share its port with INADDR_ANY.
+
+On Windows, binding 192.168.1.10:27036 succeeds while another socket holds
+0.0.0.0:27036. Wine binds UDP sockets that name a local adapter address to
+INADDR_ANY instead, after restricting them to the interface, so they can
+receive broadcasts. That bind then collided with the wildcard socket, both
+in Wine's own address tracking and in the kernel. Steam hit this: its LAN
+discovery sender binds each adapter's address on the port its listener
+already holds on 0.0.0.0. The bind failed ("Couldn't open to sending socket"),
+so other machines never saw this one and local network game transfers didn't
+work.
+
+Check address conflicts against the address the application asked for. If
+the kernel refuses the INADDR_ANY bind, bind the specific address instead;
+bind_to_interface() has already set SO_REUSEADDR, which lets it coexist with
+the wildcard on BSD and macOS.
+
+Applies to the Wine tree in CodeWeavers' crossover-sources (26.3.0).
+
+--- a/server/sock.c
++++ b/server/sock.c
+@@ -3029,10 +3029,10 @@
+     case IOCTL_AFD_BIND:
+     {
+         const struct afd_bind_params *params = get_req_data();
+-        union unix_sockaddr unix_addr, bind_addr;
++        union unix_sockaddr unix_addr, bind_addr, check_addr;
+         data_size_t in_size;
+         socklen_t unix_len;
+-        int v6only = 1;
++        int v6only = 1, iface_bound = 0, ret = 0;
+ 
+         /* the ioctl is METHOD_NEITHER, so ntdll gives us the output buffer as
+          * input */
+@@ -3077,9 +3077,13 @@
+             }
+ #endif
+ 
+-            if (!memcmp( &unix_addr.in.sin_addr, magic_loopback_addr, 4 )
+-                    || bind_to_interface( sock, &unix_addr.in ))
++            if (!memcmp( &unix_addr.in.sin_addr, magic_loopback_addr, 4 ))
++                bind_addr.in.sin_addr.s_addr = htonl( INADDR_ANY );
++            else if (bind_to_interface( sock, &unix_addr.in ))
++            {
+                 bind_addr.in.sin_addr.s_addr = htonl( INADDR_ANY );
++                iface_bound = 1;
++            }
+         }
+         else if (unix_addr.addr.sa_family == AF_INET6)
+         {
+@@ -3103,7 +3107,11 @@
+     }
+ #endif
+ 
+-        if (check_addr_usage( sock, &bind_addr, v6only ))
++        /* Windows lets a specific address share a port with the wildcard, so
++         * check the address the application asked for, not INADDR_ANY. */
++        check_addr = bind_addr;
++        if (iface_bound) check_addr.in.sin_addr = unix_addr.in.sin_addr;
++        if (check_addr_usage( sock, &check_addr, v6only ))
+             return;
+ 
+ #ifdef HAS_BLUETOOTH
+@@ -3140,8 +3148,20 @@
+         }
+         else
+ #endif
+-        if (bind( unix_fd, &bind_addr.addr, unix_len ) < 0)
+         {
++            ret = bind( unix_fd, &bind_addr.addr, unix_len );
++            /* Another socket holds INADDR_ANY on this port. Bind the specific
++             * address instead; bind_to_interface() set SO_REUSEADDR, which
++             * lets it coexist with the wildcard. The socket can still send
++             * broadcasts but won't receive them. */
++            if (ret < 0 && errno == EADDRINUSE && iface_bound)
++            {
++                bind_addr.in.sin_addr = unix_addr.in.sin_addr;
++                ret = bind( unix_fd, &bind_addr.addr, unix_len );
++            }
++        }
++        if (ret < 0)
++        {
+             if (errno == EADDRINUSE && sock->reuseaddr)
+                 errno = EACCES;
+ 
