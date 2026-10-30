@@ -55,8 +55,8 @@ scripts/package-macos.sh native     # current architecture only, faster
 
 Prebuilt downloads are attached to each
 [GitHub release](https://github.com/hashspace-apps/wine-wrap/releases). The latest
-build of `master` is always available as the
-[`dev-unsigned` pre-release](https://github.com/hashspace-apps/wine-wrap/releases/tag/dev-unsigned).
+build of `master` is always available as a `dev-<run>` pre-release on the same
+page.
 To publish one from another branch, run the CI workflow manually (Actions → CI →
 Run workflow). Builds are shared as release files, not Actions artifacts, so they
 don't use the account's artifact storage.
@@ -278,7 +278,7 @@ GitHub Actions workflows live in `.github/workflows/`:
 
 | Workflow | Runs on | Does |
 |---|---|---|
-| `ci.yml` | every push to `master`, every pull request, manual runs | `cargo fmt --check`; clippy on macOS and Linux; tests on macOS arm64, macOS x86_64 and Linux; a minimum Rust version check (1.88 for core/CLI, 1.95 for the GUI); `cargo deny` (licenses, RustSec advisories, crate sources); then builds the universal `.dmg`, launches it on a Mac runner as a smoke test, and (on `master` or manual runs) publishes it as the `dev-unsigned` pre-release |
+| `ci.yml` | every push to `master`, every pull request, manual runs | `cargo fmt --check`; clippy on macOS and Linux; tests on macOS arm64, macOS x86_64 and Linux; a minimum Rust version check (1.88 for core/CLI, 1.95 for the GUI); `cargo deny` (licenses, RustSec advisories, crate sources); then builds the universal `.dmg`, launches it on a Mac runner as a smoke test, and (on `master` or manual runs) publishes it as a `dev-<run>` pre-release, deleting the previous one |
 | `release.yml` | pushing a `v*.*.*` tag | checks that the tag matches `Cargo.toml`, runs CI, builds the macOS `.dmg`, the macOS CLI tarball and a Linux CLI tarball, uploads them to a draft GitHub release and publishes it with `SHA256SUMS.txt` |
 
 Dependabot (`.github/dependabot.yml`) opens weekly update PRs for crates and actions.

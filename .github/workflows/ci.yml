@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       publish_prerelease:
-        description: Publish the unsigned build as the "dev-unsigned" GitHub pre-release
+        description: Publish the unsigned build as a "dev-<run>" GitHub pre-release
         type: boolean
         default: true
   # Lets the release workflow run the same checks before publishing.
@@ -147,7 +147,7 @@ jobs:
     if: ${{ !inputs.skip_package }}
     runs-on: macos-latest
     permissions:
-      # Needed to publish the dev-unsigned pre-release.
+      # Needed to publish the development pre-release.
       contents: write
     steps:
       - uses: actions/checkout@v7
@@ -203,20 +203,25 @@ jobs:
       # Builds are delivered as GitHub release files rather than Actions
       # artifacts: release files don't count against the account's (small)
       # artifact storage quota. Every push to master and every manual run
-      # replaces the rolling "dev-unsigned" pre-release.
-      - name: Publish "dev-unsigned" pre-release
+      # publishes a "dev-<run>" pre-release and deletes the older ones.
+      # Releases are immutable in this repo, and a deleted release's tag can
+      # never be used again, so each build needs a tag of its own.
+      - name: Publish development pre-release
         if: >-
           (github.event_name == 'push' && github.ref == 'refs/heads/master') ||
           (github.event_name == 'workflow_dispatch' && inputs.publish_prerelease)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          tag="dev-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
           notes="Unsigned (ad-hoc signed) development build of ${GITHUB_SHA::7} from ${GITHUB_REF_NAME}.
 
           Not notarized by Apple: after copying WineWrap.app to Applications, run
           \`xattr -dr com.apple.quarantine /Applications/WineWrap.app\` once.
           See the README section \"Running an unsigned build\"."
-          gh release delete dev-unsigned --yes --cleanup-tag || true
-          gh release create dev-unsigned dist/* --prerelease --target "$GITHUB_SHA" \
-            --title "Development build (unsigned)" --notes "$notes"
-          echo "### Download: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/dev-unsigned" >> "$GITHUB_STEP_SUMMARY"
+          gh release create "$tag" dist/* --prerelease --target "$GITHUB_SHA" \
+            --title "Development build (unsigned, ${GITHUB_SHA::7})" --notes "$notes"
+          gh release list --limit 200 --json tagName --jq '.[].tagName' |
+            grep '^dev-' | grep -vx "$tag" |
+            while read -r old; do gh release delete "$old" --yes --cleanup-tag || true; done
+          echo "### Download: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/tag/$tag" >> "$GITHUB_STEP_SUMMARY"
