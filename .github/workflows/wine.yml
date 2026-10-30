@@ -1,0 +1,79 @@
+name: Wine build
+
+# Push a tag like `wine-winewrap-26.3.0-4` (matching VERSION in
+# scripts/build-wine-macos.sh) to build WineWrap's Wine on a macOS runner and
+# publish it as a GitHub release, with the source it was built from (LGPL).
+# The app downloads the build from that release (see wine_builds.rs), so
+# publish it before tagging the app release that points at it.
+on:
+  push:
+    tags: ["wine-winewrap-*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wine-${{ github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  TAG: ${{ github.ref_name }}
+
+jobs:
+  build:
+    name: Build and publish
+    # Apple Silicon runner; Wine is built for x86_64 and its configure checks
+    # run under Rosetta.
+    runs-on: macos-latest
+    # A first build compiles the MinGW GCC toolchain too.
+    timeout-minutes: 330
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Verify tag
+        id: version
+        run: |
+          cx="$(sed -n 's/^CX_VERSION=//p' scripts/build-wine-macos.sh)"
+          version="$(sed -n 's/^VERSION="\$CX_VERSION\(.*\)"/\1/p' scripts/build-wine-macos.sh)"
+          version="$cx$version"
+          if [[ "$TAG" != "wine-winewrap-$version" ]]; then
+            echo "::error::Tag $TAG does not match the build script's version $version"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "cx=$cx" >> "$GITHUB_OUTPUT"
+
+      - name: Install Rosetta
+        run: softwareupdate --install-rosetta --agree-to-license || true
+
+      - name: Build Wine
+        run: scripts/build-wine-macos.sh "$RUNNER_TEMP/wine-build"
+
+      - name: Collect release files
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          CX: ${{ steps.version.outputs.cx }}
+        run: |
+          w="$RUNNER_TEMP/wine-build"
+          mkdir dist
+          mv "$w/wine-winewrap-$VERSION-osx64.tar.xz" dist/
+          mv "$w/downloads/crossover-sources-$CX.tar.gz" dist/
+          cp scripts/wine-patches/*.patch dist/
+          (cd dist && shasum -a 256 * > SHA256SUMS)
+          cat dist/SHA256SUMS
+
+      - name: Publish release
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/* --clobber
+          else
+            gh release create "$TAG" dist/* --verify-tag \
+              --title "WineWrap Wine $VERSION" --notes-file scripts/wine-release-notes.md
+          fi
