@@ -221,7 +221,13 @@ pub fn wine_env(bottle: &Bottle, runtime: &WineRuntime) -> BTreeMap<String, Stri
                 env.insert("WINEWRAP_WINED3D_APPS".into(), WINED3D_APPS.into());
             }
         }
-        GraphicsBackend::D3DMetal | GraphicsBackend::WineD3D => {}
+        // Everything runs on wined3d. The listed programs still need its
+        // OpenGL renderer, and since wined3d reports the GPU as NVIDIA, no
+        // program may find an NVAPI it would then call into.
+        GraphicsBackend::D3DMetal | GraphicsBackend::WineD3D => {
+            env.insert("WINEWRAP_WINED3D_APPS".into(), WINED3D_APPS.into());
+            overrides.push("nvapi,nvapi64=d".into());
+        }
     }
     // Use Microsoft's Visual C++ runtime once it's installed (Steam installs
     // it for most games): some games check its DLLs and reject Wine's own,
@@ -316,12 +322,15 @@ mod tests {
     }
 
     #[test]
-    fn d3dmetal_without_support_only_prefers_native_vc_runtime() {
+    fn d3dmetal_without_support_falls_back_to_wined3d() {
         let (bottle, rt, _d) = fixture(BottleConfig::new("Steam"), RuntimeKind::AppBundle);
+        let env = wine_env(&bottle, &rt);
         assert_eq!(
-            wine_env(&bottle, &rt)["WINEDLLOVERRIDES"],
-            format!("{VC_RUNTIME_DLLS}=n,b")
+            env["WINEDLLOVERRIDES"],
+            format!("nvapi,nvapi64=d;{VC_RUNTIME_DLLS}=n,b")
         );
+        assert_eq!(env["WINEWRAP_WINED3D_APPS"], WINED3D_APPS);
+        assert!(!env.contains_key("WINEWRAP_D3DMETAL_DIR"));
     }
 
     #[test]
