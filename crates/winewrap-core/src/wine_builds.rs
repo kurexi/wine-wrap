@@ -28,7 +28,7 @@ const RELEASES_API: &str =
 
 /// WineWrap's own build, made by `scripts/build-wine-macos.sh` and published
 /// as a release of this repository (with its source, as the LGPL requires).
-const WINEWRAP_BUILD_VERSION: &str = "26.3.0-3";
+const WINEWRAP_BUILD_VERSION: &str = "26.3.0-4";
 const WINEWRAP_BUILD_SIZE: u64 = 213_232_452;
 const WINEWRAP_RELEASES: &str = "https://github.com/kurexi/wine-wrap/releases/download";
 
@@ -310,11 +310,11 @@ mod tests {
     fn winewrap_build_is_pinned() {
         let build = latest_build(WineFlavor::WineWrap).unwrap();
         assert_eq!(build, winewrap_build());
-        assert_eq!(build.runtime_name(), "wine-winewrap-26.3.0-3");
+        assert_eq!(build.runtime_name(), "wine-winewrap-26.3.0-4");
         assert_eq!(
             build.url,
             "https://github.com/kurexi/wine-wrap/releases/download/\
-             wine-winewrap-26.3.0-3/wine-winewrap-26.3.0-3-osx64.tar.xz"
+             wine-winewrap-26.3.0-4/wine-winewrap-26.3.0-4-osx64.tar.xz"
         );
     }
 

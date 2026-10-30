@@ -17,7 +17,7 @@ JOBS="$(sysctl -n hw.ncpu)"
 CX_VERSION=26.3.0
 # WineWrap's build of it. Bump the revision whenever the build changes, so
 # Steam bottles move to the new one (see wine_builds.rs).
-VERSION="$CX_VERSION-3"
+VERSION="$CX_VERSION-4"
 GCC_VERSION=15.2.0
 DOWNLOADS=(
   "https://media.codeweavers.com/pub/crossover/source/crossover-sources-$CX_VERSION.tar.gz ac99c8ca4b3848f3e81784135f023df266b61c2345726ea55a50b3e030dd6872"

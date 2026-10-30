@@ -185,7 +185,7 @@ Apple's license doesn't allow redistributing D3DMetal, so you supply it:
    managed `wine-winewrap-*` build), pointing at the mounted volume:
 
    ```bash
-   winewrap runtime install-d3dmetal wine-winewrap-26.3.0-3 "/Volumes/Evaluation environment for Windows games 4.0 beta 3"
+   winewrap runtime install-d3dmetal wine-winewrap-26.3.0-4 "/Volumes/Evaluation environment for Windows games 4.0 beta 3"
    ```
 
    You can eject the images afterwards: everything D3DMetal needs is copied into
@@ -297,6 +297,24 @@ git push origin v0.2.0
 ```
 
 Tags with a suffix such as `v0.2.0-beta.1` are published as pre-releases.
+
+If the Wine build changed (a new patch in `scripts/wine-patches/`, say), publish
+it first, because the app downloads it from its own release:
+
+1. Bump `VERSION` in `scripts/build-wine-macos.sh` and `WINEWRAP_BUILD_VERSION`
+   in `crates/winewrap-core/src/wine_builds.rs`, and update
+   `scripts/wine-release-notes.md`.
+2. Once that's merged, tag it and push the tag. The Wine build workflow builds
+   it on a macOS runner (a couple of hours) and publishes the build together with
+   the CrossOver source and patches:
+
+```bash
+git tag wine-winewrap-26.3.0-4
+```
+
+```bash
+git push origin wine-winewrap-26.3.0-4
+```
 
 ### Code signing (optional)
 
