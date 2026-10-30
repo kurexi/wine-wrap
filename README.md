@@ -185,7 +185,7 @@ Apple's license doesn't allow redistributing D3DMetal, so you supply it:
    managed `wine-winewrap-*` build), pointing at the mounted volume:
 
    ```bash
-   winewrap runtime install-d3dmetal wine-winewrap-26.3.0-3 "/Volumes/Evaluation environment for Windows games 4.0 beta 3"
+   winewrap runtime install-d3dmetal wine-winewrap-26.3.0-4 "/Volumes/Evaluation environment for Windows games 4.0 beta 3"
    ```
 
    You can eject the images afterwards: everything D3DMetal needs is copied into
