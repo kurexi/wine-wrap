@@ -37,6 +37,9 @@ pub enum Error {
     #[error("{0} is not a Wine installation (no bin/wine or bin/wine64 found)")]
     NotAWineInstall(PathBuf),
 
+    #[error("no D3DMetal found under {0}; install Apple's Game Porting Toolkit (or mount its disk image) and point at it")]
+    D3DMetalNotFound(PathBuf),
+
     #[error("Steam is not installed in bottle {0:?}")]
     SteamNotInstalled(String),
 

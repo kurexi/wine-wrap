@@ -77,6 +77,12 @@ enum RuntimeCmd {
     Remove { name: String },
     /// Use this runtime for bottles that do not pin one.
     Default { name: String },
+    /// Graft Apple's D3DMetal (DirectX 12 → Metal) from a Game Porting Toolkit
+    /// into a runtime. `gptk` is the install folder or a mounted
+    /// `Game Porting Toolkit-*.dmg` under /Volumes.
+    InstallD3dmetal { name: String, gptk: PathBuf },
+    /// Remove a grafted D3DMetal, restoring the runtime's built-in DirectX DLLs.
+    RemoveD3dmetal { name: String },
 }
 
 #[derive(Subcommand)]
@@ -331,6 +337,17 @@ fn runtime(ww: &mut WineWrap, cmd: RuntimeCmd) -> Result<()> {
         RuntimeCmd::Default { name } => {
             ww.set_default_runtime(&name)?;
             println!("Default runtime is now {name:?}");
+        }
+        RuntimeCmd::InstallD3dmetal { name, gptk } => {
+            let rt = ww.install_d3dmetal(&name, &gptk)?;
+            println!(
+                "Grafted D3DMetal into runtime {:?}. Set a bottle's graphics to d3dmetal to use it.",
+                rt.name
+            );
+        }
+        RuntimeCmd::RemoveD3dmetal { name } => {
+            ww.remove_d3dmetal(&name)?;
+            println!("Removed D3DMetal from runtime {name:?}");
         }
     }
     Ok(())
