@@ -174,7 +174,11 @@ MoltenVK, which only reaches Direct3D feature level 11_0 — enough to create a
 device, but not to run feature-level-12 games. D3DMetal reaches feature level
 12.
 
-Apple's license doesn't allow redistributing D3DMetal, so you supply it:
+Apple's license doesn't allow redistributing D3DMetal, so you supply it. In the
+app, a bottle that uses D3DMetal shows a **D3DMetal is not added yet** box until
+its runtime has it: mount the Game Porting Toolkit image as in step 1 below,
+click **Add D3DMetal…** and choose the mounted disk. The bottle's settings offer
+to remove it again. From the command line:
 
 1. Download the
    [Game Porting Toolkit](https://developer.apple.com/games/game-porting-toolkit/)

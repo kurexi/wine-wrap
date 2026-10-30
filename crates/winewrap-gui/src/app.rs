@@ -372,6 +372,51 @@ impl WineWrapApp {
             });
     }
 
+    /// The runtime a bottle runs with, from the cached list (no disk scan, so
+    /// it can be called every frame).
+    fn cached_runtime_for(&self, bottle: &Bottle) -> Option<&WineRuntime> {
+        let name = bottle.config.runtime.as_ref().or(self
+            .ww
+            .as_ref()?
+            .config
+            .default_runtime
+            .as_ref());
+        match name {
+            Some(name) => self.runtimes.iter().find(|r| &r.name == name),
+            None => self.runtimes.first(),
+        }
+    }
+
+    /// Let the user pick the mounted Game Porting Toolkit image and copy
+    /// D3DMetal from it into `runtime`.
+    fn add_d3dmetal(&mut self, ctx: &egui::Context, runtime: String) {
+        let start = gptk_volume().unwrap_or_else(|| PathBuf::from("/Volumes"));
+        let Some(gptk) = rfd::FileDialog::new()
+            .set_title("Choose the mounted “Evaluation environment for Windows games” disk")
+            .set_directory(start)
+            .pick_folder()
+        else {
+            return;
+        };
+        let Some(ww) = self.ww.clone() else { return };
+        self.jobs
+            .spawn(ctx, format!("Add D3DMetal to {runtime}"), move |r| {
+                r.log(format!("Copying D3DMetal from {} …", gptk.display()));
+                ww.install_d3dmetal(&runtime, &gptk)?;
+                r.log("D3DMetal is ready. You can eject the Game Porting Toolkit disks.");
+                Ok(())
+            });
+    }
+
+    fn remove_d3dmetal(&mut self, runtime: &str) {
+        let Some(ww) = &self.ww else { return };
+        match ww.remove_d3dmetal(runtime) {
+            Ok(()) => self.push_log(format!("Removed D3DMetal from {runtime}")),
+            Err(e) => self.push_log(format!("Could not remove D3DMetal from {runtime}: {e}")),
+        }
+        self.reload();
+    }
+
     /// Let the user point at a Wine installation that was not auto-detected.
     fn add_runtime_dialog(&mut self) {
         let Some(path) = rfd::FileDialog::new()
@@ -522,6 +567,21 @@ impl WineWrapApp {
         });
         ui.separator();
 
+        // A Steam bottle still waiting for WineWrap's Wine gets it (and with
+        // it a runtime to add D3DMetal to) when Steam is installed or started.
+        let missing_d3dmetal = (bottle.config.graphics == GraphicsBackend::D3DMetal
+            && !needs_steam_runtime(&bottle.config))
+        .then(|| self.cached_runtime_for(&bottle))
+        .flatten()
+        .filter(|rt| !rt.has_d3dmetal())
+        .map(|rt| rt.name.clone());
+        if let Some(runtime) = missing_d3dmetal {
+            if d3dmetal_box(ui, busy) {
+                self.add_d3dmetal(&ctx, runtime);
+            }
+            ui.add_space(8.0);
+        }
+
         egui::ScrollArea::vertical().show(ui, |ui| {
             if has_steam {
                 egui::CollapsingHeader::new(format!("Games ({})", self.games.len()))
@@ -571,6 +631,27 @@ impl WineWrapApp {
             return;
         };
         settings_form(ui, draft, &runtimes);
+
+        let grafted = self
+            .cached_runtime_for(bottle)
+            .filter(|rt| rt.d3dmetal_dll_dir().is_some())
+            .map(|rt| rt.name.clone());
+        if let Some(runtime) = grafted {
+            let mut remove = false;
+            ui.horizontal(|ui| {
+                ui.weak(format!("D3DMetal is added to {runtime}."));
+                remove = ui
+                    .small_button("Remove D3DMetal")
+                    .on_hover_text("Delete the copied D3DMetal; you can add it again later")
+                    .clicked();
+            });
+            if remove {
+                self.remove_d3dmetal(&runtime);
+            }
+        }
+        let Some(draft) = self.draft.as_mut() else {
+            return;
+        };
 
         ui.horizontal(|ui| {
             ui.label("Steam arguments");
@@ -892,6 +973,52 @@ fn rosetta_box(ui: &mut egui::Ui, busy: bool) -> bool {
             .clicked();
     });
     install
+}
+
+/// Explains that the bottle wants D3DMetal, which the user has to supply, and
+/// offers to add it. Returns whether "Add D3DMetal…" was clicked.
+fn d3dmetal_box(ui: &mut egui::Ui, busy: bool) -> bool {
+    let mut add = false;
+    egui::Frame::group(ui.style()).show(ui, |ui| {
+        ui.colored_label(
+            ui.visuals().warn_fg_color,
+            egui::RichText::new("⚠ D3DMetal is not added yet").strong(),
+        );
+        ui.label(
+            "Most modern games need Apple's D3DMetal. Apple's license doesn't let \
+             WineWrap include it, so add it from Apple's free Game Porting Toolkit:",
+        );
+        ui.horizontal_wrapped(|ui| {
+            ui.label("1. Download the");
+            ui.hyperlink_to("Game Porting Toolkit", GPTK_URL);
+            ui.label("(free with an Apple ID).");
+        });
+        ui.label(
+            "2. Open the downloaded .dmg, then open the “Evaluation environment for \
+             Windows games” disk image inside it.",
+        );
+        ui.label("3. Click below and choose that disk.");
+        add = ui
+            .add_enabled(!busy, egui::Button::new("Add D3DMetal…"))
+            .on_disabled_hover_text("Wait for the current task to finish")
+            .clicked();
+    });
+    add
+}
+
+const GPTK_URL: &str = "https://developer.apple.com/games/game-porting-toolkit/";
+
+/// A mounted Game Porting Toolkit "Evaluation environment" disk, if any.
+fn gptk_volume() -> Option<PathBuf> {
+    std::fs::read_dir("/Volumes")
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("Evaluation environment for Windows games"))
+        })
 }
 
 /// Shared settings widgets for the new-bottle dialog and the settings panel.
