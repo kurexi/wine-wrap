@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3b1466"/>
+      <stop offset="1" stop-color="#14082a"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.42" r="0.45">
+      <stop offset="0" stop-color="#ff3d7f" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#ff3d7f" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="wine" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ff4d6d"/>
+      <stop offset="1" stop-color="#a0103a"/>
+    </linearGradient>
+    <clipPath id="bowl">
+      <path d="M340 240 H684 C684 430 620 572 512 600 C404 572 340 430 340 240 Z"/>
+    </clipPath>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
+  <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#glow)"/>
+  <!-- wine -->
+  <g clip-path="url(#bowl)">
+    <path d="M300 345 C380 320 440 370 512 345 C584 320 644 370 724 345 V640 H300 Z" fill="url(#wine)"/>
+  </g>
+  <!-- glass -->
+  <path d="M340 240 H684 C684 430 620 572 512 600 C404 572 340 430 340 240 Z"
+        fill="none" stroke="#ffffff" stroke-width="26" stroke-linejoin="round"/>
+  <rect x="498" y="598" width="28" height="160" fill="#ffffff"/>
+  <path d="M392 790 C392 758 450 748 512 748 C574 748 632 758 632 790 Z" fill="#ffffff"/>
+  <!-- play button -->
+  <path d="M478 392 L478 512 L578 452 Z" fill="#ffffff" stroke="#ffffff" stroke-width="18" stroke-linejoin="round"/>
+  <!-- highlight -->
+  <path d="M384 280 C386 360 400 420 430 470" fill="none" stroke="#ffffff" stroke-opacity="0.35" stroke-width="14" stroke-linecap="round"/>
+</svg>
