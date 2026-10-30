@@ -4,31 +4,43 @@
       <stop offset="0" stop-color="#3b1466"/>
       <stop offset="1" stop-color="#14082a"/>
     </linearGradient>
-    <radialGradient id="glow" cx="0.5" cy="0.42" r="0.45">
-      <stop offset="0" stop-color="#ff3d7f" stop-opacity="0.55"/>
+    <radialGradient id="glow" cx="0.5" cy="0.55" r="0.45">
+      <stop offset="0" stop-color="#ff3d7f" stop-opacity="0.5"/>
       <stop offset="1" stop-color="#ff3d7f" stop-opacity="0"/>
     </radialGradient>
-    <linearGradient id="wine" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#ff4d6d"/>
-      <stop offset="1" stop-color="#a0103a"/>
+    <linearGradient id="glass" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#7a0f30"/>
+      <stop offset="0.35" stop-color="#d6234f"/>
+      <stop offset="1" stop-color="#5c0a24"/>
     </linearGradient>
-    <clipPath id="bowl">
-      <path d="M340 240 H684 C684 430 620 572 512 600 C404 572 340 430 340 240 Z"/>
+    <linearGradient id="ribbon" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#ffe08a"/>
+      <stop offset="1" stop-color="#f5a623"/>
+    </linearGradient>
+    <clipPath id="bottle">
+      <path d="M466 220 H558 V370 C558 420 646 440 646 530 V818 Q646 866 598 866 H426 Q378 866 378 818 V530 C378 440 466 420 466 370 Z"/>
     </clipPath>
   </defs>
   <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#bg)"/>
   <rect x="100" y="100" width="824" height="824" rx="185" fill="url(#glow)"/>
-  <!-- wine -->
-  <g clip-path="url(#bowl)">
-    <path d="M300 345 C380 320 440 370 512 345 C584 320 644 370 724 345 V640 H300 Z" fill="url(#wine)"/>
+  <!-- cork / foil -->
+  <rect x="470" y="160" width="84" height="80" rx="14" fill="#2a0a18"/>
+  <!-- bottle -->
+  <path d="M466 220 H558 V370 C558 420 646 440 646 530 V818 Q646 866 598 866 H426 Q378 866 378 818 V530 C378 440 466 420 466 370 Z" fill="url(#glass)"/>
+  <!-- ribbon wrapped around the bottle -->
+  <g clip-path="url(#bottle)" fill="url(#ribbon)">
+    <rect x="200" y="505" width="640" height="54" transform="rotate(-24 512 532)"/>
+    <rect x="200" y="645" width="640" height="54" transform="rotate(-24 512 672)"/>
+    <rect x="200" y="785" width="640" height="54" transform="rotate(-24 512 812)"/>
   </g>
-  <!-- glass -->
-  <path d="M340 240 H684 C684 430 620 572 512 600 C404 572 340 430 340 240 Z"
-        fill="none" stroke="#ffffff" stroke-width="26" stroke-linejoin="round"/>
-  <rect x="498" y="598" width="28" height="160" fill="#ffffff"/>
-  <path d="M392 790 C392 758 450 748 512 748 C574 748 632 758 632 790 Z" fill="#ffffff"/>
-  <!-- play button -->
-  <path d="M478 392 L478 512 L578 452 Z" fill="#ffffff" stroke="#ffffff" stroke-width="18" stroke-linejoin="round"/>
-  <!-- highlight -->
-  <path d="M384 280 C386 360 400 420 430 470" fill="none" stroke="#ffffff" stroke-opacity="0.35" stroke-width="14" stroke-linecap="round"/>
+  <!-- glass highlight -->
+  <path d="M414 560 V800" stroke="#ffffff" stroke-opacity="0.3" stroke-width="18" stroke-linecap="round"/>
+  <!-- bow at the neck -->
+  <g fill="url(#ribbon)" stroke="#c97a10" stroke-width="6" stroke-linejoin="round">
+    <path d="M512 352 L470 470 L438 450 Z"/>
+    <path d="M512 352 L556 470 L588 450 Z"/>
+    <path d="M512 352 C450 280 372 300 384 350 C394 396 470 384 512 352 Z"/>
+    <path d="M512 352 C574 280 652 300 640 350 C630 396 554 384 512 352 Z"/>
+    <circle cx="512" cy="352" r="28"/>
+  </g>
 </svg>
