@@ -24,6 +24,9 @@ pub struct WineWrapApp {
     new_bottle: Option<NewBottle>,
     /// Bottle waiting for the user to confirm its deletion.
     delete_bottle: Option<String>,
+    /// A bottle whose settings changed while Steam was running in it, as it
+    /// was when Steam started: Steam needs a restart to pick them up.
+    restart_steam: Option<Bottle>,
     jobs: Jobs,
     progress: Option<Option<f32>>,
     log: Vec<String>,
@@ -49,6 +52,7 @@ impl WineWrapApp {
             games: Vec::new(),
             new_bottle: None,
             delete_bottle: None,
+            restart_steam: None,
             jobs: Jobs::new(),
             progress: None,
             log: Vec::new(),
@@ -275,6 +279,13 @@ impl WineWrapApp {
         };
         let registry_changed = bottle.config.windows_version != draft.windows_version
             || bottle.config.retina != draft.retina;
+        // Keep the settings Steam started with (the first ones, if saved
+        // again before restarting): quitting it needs the runtime it runs on.
+        let started_with = match self.restart_steam.take() {
+            Some(old) if old.path == bottle.path => Some(old),
+            _ => steam::is_running(&bottle).then(|| bottle.clone()),
+        };
+        self.restart_steam = started_with;
         let bottle = Bottle {
             path: bottle.path,
             config: draft,
@@ -301,6 +312,34 @@ impl WineWrapApp {
             }
         }
         self.reload();
+    }
+
+    /// Quit Steam in a bottle and start it again with the saved settings.
+    fn restart_steam(&mut self, ctx: &egui::Context, started_with: Bottle) {
+        let Some(ww) = self.ww.clone() else { return };
+        self.jobs.spawn(
+            ctx,
+            format!("Restart Steam in {:?}", started_with.name()),
+            move |r| {
+                r.log("Quitting Steam …");
+                let rt = ww.runtime_for(&started_with)?;
+                steam::quit(&started_with, &rt, std::time::Duration::from_secs(60))?;
+                let mut bottle = Bottle::load(&started_with.path)?;
+                let rt = prepare_steam_runtime(&ww, &mut bottle, r)?;
+                register_steam_libraries(&bottle)
+                    .into_iter()
+                    .for_each(|line| r.log(line));
+                let label = format!("{}-steam", bottle.name());
+                let (child, log) = steam::launch_command(&bottle, &rt)
+                    .spawn_logged(&ww.paths.logs_dir(), &label)?;
+                r.log(format!(
+                    "Started {label} (pid {}), log: {}",
+                    child.id(),
+                    log.display()
+                ));
+                Ok(())
+            },
+        );
     }
 
     fn run_program(&mut self, bottle: &Bottle) {
@@ -566,6 +605,39 @@ impl WineWrapApp {
             }
         });
         ui.separator();
+
+        let restart = self
+            .restart_steam
+            .as_ref()
+            .filter(|b| b.path == bottle.path)
+            .cloned();
+        if let Some(started_with) = restart {
+            let mut action = None;
+            egui::Frame::group(ui.style()).show(ui, |ui| {
+                ui.label("Steam is running with the old settings. Restart it to use the new ones.");
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(!busy, egui::Button::new("⟳ Restart Steam"))
+                        .on_hover_text(
+                            "Quits Steam and any game running in it, then starts Steam again",
+                        )
+                        .clicked()
+                    {
+                        action = Some(true);
+                    }
+                    if ui.button("Later").clicked() {
+                        action = Some(false);
+                    }
+                });
+            });
+            if let Some(restart) = action {
+                self.restart_steam = None;
+                if restart {
+                    self.restart_steam(&ctx, started_with);
+                }
+            }
+            ui.add_space(8.0);
+        }
 
         // A Steam bottle still waiting for WineWrap's Wine gets it (and with
         // it a runtime to add D3DMetal to) when Steam is installed or started.
