@@ -203,6 +203,17 @@ D3DMetal; a few programs it can't serve, such as the Rockstar Games Launcher,
 keep Wine's Direct3D. To undo the graft, run
 `winewrap runtime remove-d3dmetal <runtime>`.
 
+## Tested games
+
+Games tried on an M4 Mac with WineWrap's own Wine build, from a Steam bottle.
+
+| Game | Status | Graphics | Notes |
+| --- | --- | --- | --- |
+| Red Dead Redemption | ✅ Works | D3DMetal (Game Porting Toolkit 4.0 beta 3) | Starts from Steam through the Rockstar Games Launcher, signs in to Social Club, and plays at 60 FPS (1280×800). An Xbox Wireless Controller works. Needs Wine patches 0004 and 0005. |
+| Phantom Blade Zero | ❌ Doesn't work | D3DMetal | Crashes inside its Denuvo DRM before rendering anything. It fails in CrossOver too. |
+
+![Red Dead Redemption running in WineWrap](screenshots/red-dead-redemption.png)
+
 ## Troubleshooting
 
 * **Steam window is black**: a known limitation of upstream Wine on macOS
