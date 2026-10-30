@@ -1100,6 +1100,14 @@ fn install_steam_job(
             bottle.name().to_string(),
         ));
     }
+    r.log("Installing the Microsoft Visual C++ runtime that most games need …");
+    let result = ww.install_vc_runtime(bottle, rt, |done, total| {
+        r.progress(total.filter(|&t| t > 0).map(|t| done as f32 / t as f32));
+    });
+    r.progress(None);
+    if let Err(e) = result {
+        r.log(format!("Could not install the Visual C++ runtime: {e}"));
+    }
     r.log("Steam installed. Click “Launch Steam” to sign in.");
     Ok(())
 }

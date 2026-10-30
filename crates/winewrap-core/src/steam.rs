@@ -16,6 +16,21 @@ pub const STEAM_SETUP_URL: &str =
     "https://cdn.cloudflare.steamstatic.com/client/installer/SteamSetup.exe";
 pub const STEAM_SETUP_FILE: &str = "SteamSetup.exe";
 
+/// Microsoft's Visual C++ 2015-2022 runtime installers (64- and 32-bit), as
+/// download URL and cache file name. Most games need the runtime. Steam
+/// installs it per game, but under Wine that doesn't always happen, so
+/// WineWrap installs it along with Steam.
+pub const VC_REDIST: [(&str, &str); 2] = [
+    (
+        "https://aka.ms/vs/17/release/vc_redist.x64.exe",
+        "vc_redist.x64.exe",
+    ),
+    (
+        "https://aka.ms/vs/17/release/vc_redist.x86.exe",
+        "vc_redist.x86.exe",
+    ),
+];
+
 /// Where `SteamSetup.exe` installs to by default.
 const STEAM_WIN_DIR: &str = r"C:\Program Files (x86)\Steam";
 
@@ -66,6 +81,13 @@ pub fn needs_winewrap_runtime(config: &BottleConfig) -> bool {
 /// Run the Steam installer silently.
 pub fn install_command(bottle: &Bottle, runtime: &WineRuntime, setup_exe: &Path) -> LaunchSpec {
     LaunchSpec::wine(bottle, runtime).arg(setup_exe).arg("/S")
+}
+
+/// Run a Visual C++ runtime installer silently.
+pub fn vc_redist_command(bottle: &Bottle, runtime: &WineRuntime, installer: &Path) -> LaunchSpec {
+    LaunchSpec::wine(bottle, runtime)
+        .arg(installer)
+        .args(["/install", "/quiet", "/norestart"])
 }
 
 /// Start the Steam client, with the bottle's extra Steam arguments.

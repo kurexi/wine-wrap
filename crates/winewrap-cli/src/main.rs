@@ -485,6 +485,11 @@ fn steam_cmd(ww: &WineWrap, runner: &Runner, cmd: SteamCmd) -> Result<()> {
                 if !steam::is_installed(&b) {
                     bail!("the installer finished but steam.exe was not found");
                 }
+                println!("Installing the Microsoft Visual C++ runtime that most games need ...");
+                match ww.install_vc_runtime(&b, &rt, progress_bar) {
+                    Ok(()) => eprintln!(),
+                    Err(e) => eprintln!("\nwarning: could not install the Visual C++ runtime: {e}"),
+                }
                 println!("Steam installed. Start it with `winewrap steam launch {bottle:?}`.");
             }
         }
