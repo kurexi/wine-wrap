@@ -103,6 +103,51 @@ pub fn play_command(bottle: &Bottle, runtime: &WineRuntime, app_id: u32) -> Laun
     launch_command(bottle, runtime).args(["-applaunch".to_string(), app_id.to_string()])
 }
 
+/// Ask the bottle's running Steam client to quit, like its Exit menu does.
+pub fn shutdown_command(bottle: &Bottle, runtime: &WineRuntime) -> LaunchSpec {
+    LaunchSpec::wine(bottle, runtime)
+        .arg(steam_exe(bottle))
+        .arg("-shutdown")
+        .cwd(steam_dir(bottle))
+}
+
+/// Whether Steam is running in the bottle. Wine processes show the host path
+/// of the program they run, so look for this bottle's `steam.exe`.
+pub fn is_running(bottle: &Bottle) -> bool {
+    let exe = steam_exe(bottle);
+    let exe = exe.to_string_lossy();
+    std::process::Command::new("ps")
+        .args(["-axo", "command="])
+        .output()
+        .is_ok_and(|out| {
+            String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .any(|line| line.trim_start().starts_with(exe.as_ref()))
+        })
+}
+
+/// Quit Steam and wait until everything in the bottle has exited, so that
+/// the next start picks up changed settings. Whatever is still running after
+/// `timeout` (a game, a stuck launcher) is stopped with `wineserver --kill`.
+pub fn quit(bottle: &Bottle, runtime: &WineRuntime, timeout: std::time::Duration) -> Result<()> {
+    shutdown_command(bottle, runtime).status()?;
+    let wait = LaunchSpec::wineserver(bottle, runtime).arg("--wait");
+    let mut child = wait
+        .to_command()
+        .spawn()
+        .map_err(|e| wait.command_error(e.to_string()))?;
+    let deadline = std::time::Instant::now() + timeout;
+    while std::time::Instant::now() < deadline {
+        if child.try_wait().at(runtime.wineserver())?.is_some() {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+    bottle.kill(runtime)?;
+    child.wait().at(runtime.wineserver())?;
+    Ok(())
+}
+
 /// Steam library folders, as host paths. Always includes the main Steam
 /// directory, followed by any extra libraries from `libraryfolders.vdf`.
 pub fn library_folders(bottle: &Bottle) -> Vec<PathBuf> {
