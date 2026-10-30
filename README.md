@@ -6,7 +6,7 @@
 
 <p align="center">
   <b>Play your Windows Steam games on a Mac.</b><br>
-  Free and open source. No Windows, no Boot Camp, no CrossOver license.
+  Free and open source. No Windows, no Boot Camp.
 </p>
 
 <p align="center">
