@@ -18,6 +18,12 @@ const DXVK_DLLS: &str = "dxgi,d3d9,d3d10core,d3d11";
 const VC_RUNTIME_DLLS: &str = "concrt140,msvcp140,msvcp140_1,msvcp140_2,\
     msvcp140_atomic_wait,msvcp140_codecvt_ids,vcomp140,vcruntime140,vcruntime140_1";
 
+/// Programs that keep Wine's own Direct3D (OpenGL renderer) when the rest of
+/// the bottle uses grafted D3DMetal, as `;`-separated exe names. The Rockstar
+/// Games Launcher draws with a D3D10 device that D3DMetal can't create. A
+/// bottle can replace the list by setting `WINEWRAP_WINED3D_APPS` itself.
+const WINED3D_APPS: &str = "Launcher.exe";
+
 /// A fully-resolved command line: program, arguments, environment and working
 /// directory. Building one has no side effects, so it can be inspected,
 /// printed (`--dry-run`) or unit-tested before being executed.
@@ -205,6 +211,15 @@ pub fn wine_env(bottle: &Bottle, runtime: &WineRuntime) -> BTreeMap<String, Stri
         // just needs the builtins to win over any native DLLs a game ships.
         GraphicsBackend::D3DMetal if runtime.has_d3dmetal() => {
             overrides.push(format!("{DXVK_DLLS},d3d12=b"));
+            // A WineWrap graft keeps D3DMetal in its own tree; our Wine build
+            // searches it first for every program but the listed ones.
+            if let Some(dir) = runtime.d3dmetal_dll_dir() {
+                env.insert(
+                    "WINEWRAP_D3DMETAL_DIR".into(),
+                    dir.to_string_lossy().into_owned(),
+                );
+                env.insert("WINEWRAP_WINED3D_APPS".into(), WINED3D_APPS.into());
+            }
         }
         GraphicsBackend::D3DMetal | GraphicsBackend::WineD3D => {}
     }
@@ -262,6 +277,20 @@ mod tests {
             format!("dxgi,d3d9,d3d10core,d3d11,d3d12=b;{VC_RUNTIME_DLLS}=n,b")
         );
         assert!(!env.contains_key("MTL_HUD_ENABLED"));
+        assert!(!env.contains_key("WINEWRAP_D3DMETAL_DIR"));
+    }
+
+    #[test]
+    fn grafted_d3dmetal_is_selected_per_program() {
+        let (bottle, rt, _d) = fixture(BottleConfig::new("Steam"), RuntimeKind::AppBundle);
+        let dir = rt.root.join("lib/d3dmetal");
+        std::fs::create_dir_all(dir.join("x86_64-windows")).unwrap();
+        std::fs::write(dir.join("x86_64-windows/dxgi.dll"), b"pe").unwrap();
+        std::fs::create_dir_all(rt.root.join("lib/external/D3DMetal.framework")).unwrap();
+        let env = wine_env(&bottle, &rt);
+        assert_eq!(env["WINEWRAP_D3DMETAL_DIR"], dir.to_string_lossy());
+        assert_eq!(env["WINEWRAP_WINED3D_APPS"], WINED3D_APPS);
+        assert_eq!(env["WINEDLLOVERRIDES"], "dxgi,d3d9,d3d10core,d3d11,d3d12=b");
     }
 
     #[test]

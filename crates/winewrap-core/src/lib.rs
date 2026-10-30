@@ -17,6 +17,7 @@
 
 pub mod bottle;
 pub mod config;
+pub mod d3dmetal;
 pub mod download;
 pub mod error;
 pub mod launch;

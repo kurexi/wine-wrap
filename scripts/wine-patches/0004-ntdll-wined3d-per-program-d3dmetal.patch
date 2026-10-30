@@ -1,0 +1,138 @@
+ntdll, wined3d: Pick D3DMetal or wined3d per program.
+
+WineWrap grafts Apple's D3DMetal into the runtime for games, but some
+programs can't run on it. The Rockstar Games Launcher draws with a D3D10
+device, which D3DMetal's DXGI/D3D11 can't create ("The Rockstar Games
+Launcher failed to initialize!"). Steam's own UI, on the other hand, needs
+D3DMetal's DXGI. CrossOver decides per program in its closed cxcompatdb.so,
+so do the same in the open:
+
+* ntdll: if WINEWRAP_D3DMETAL_DIR is set, put that tree (x86_64-windows,
+  x86_64-unix) ahead of Wine's own DLLs, unless the program's exe name is
+  listed in WINEWRAP_WINED3D_APPS (';'-separated, case-insensitive).
+* wined3d: the listed programs get the OpenGL renderer. CrossOver's default
+  on macOS is Vulkan through MoltenVK, which can't create those D3D10
+  devices either.
+* ntdll: the listed programs also get nvapi,nvapi64=d (through CrossOver's
+  add_load_order_override; WINEDLLOVERRIDES is already parsed by then).
+  wined3d reports the Apple GPU as NVIDIA, so the launcher loads NVAPI after
+  sign-in and calls a null entry point it hands back.
+
+Applies to the Wine tree in CodeWeavers' crossover-sources (26.3.0).
+
+--- a/dlls/ntdll/unix/loader.c
++++ b/dlls/ntdll/unix/loader.c
+@@ -2214,6 +2214,57 @@
+ #endif
+ 
+ /***********************************************************************
++ *           winewrap_select_graphics_backend
++ *
++ * WineWrap hack: D3DMetal's DLLs live in their own tree
++ * ($WINEWRAP_D3DMETAL_DIR/x86_64-windows, x86_64-unix), which is searched
++ * before Wine's own DLLs, so games get D3DMetal. Programs named in
++ * $WINEWRAP_WINED3D_APPS (';'-separated exe names, case-insensitive) keep
++ * Wine's DXGI and Direct3D: D3DMetal cannot create the D3D10 devices some
++ * launchers draw with.
++ */
++extern void add_load_order_override( const WCHAR *entry );
++
++static void winewrap_select_graphics_backend(void)
++{
++    const char *dir = getenv( "WINEWRAP_D3DMETAL_DIR" );
++    const char *apps = getenv( "WINEWRAP_WINED3D_APPS" );
++    const WCHAR *name, *p;
++    size_t len;
++
++    if (!dir || !*dir || !main_wargv || !main_wargv[0]) return;
++
++    for (name = p = main_wargv[0]; *p; p++) if (*p == '\\' || *p == '/') name = p + 1;
++    for (len = 0; name[len]; len++) ;
++
++    while (apps && *apps)
++    {
++        const char *end = strchr( apps, ';' );
++        size_t n = end ? end - apps : strlen( apps ), i;
++
++        if (n == len)
++        {
++            for (i = 0; i < n; i++)
++                if (towlower( name[i] ) != towlower( (unsigned char)apps[i] )) break;
++            if (i == n)
++            {
++                /* wined3d reports the Apple GPU as NVIDIA, so programs look
++                 * for NVAPI and call into the null entries it hands back. */
++                static const WCHAR no_nvapiW[] = {'n','v','a','p','i',',','n','v','a','p','i','6','4','=','d',0};
++
++                TRACE( "%s keeps wined3d\n", debugstr_w(name) );
++                add_load_order_override( no_nvapiW );
++                return;
++            }
++        }
++        apps = end ? end + 1 : NULL;
++    }
++
++    TRACE( "%s uses D3DMetal from %s\n", debugstr_w(name), dir );
++    prepend_dll_path( strdup( dir ) );
++}
++
++/***********************************************************************
+  *           start_main_thread
+  */
+ static void start_main_thread(void)
+@@ -2258,6 +2309,8 @@
+         }
+     }
+ 
++    winewrap_select_graphics_backend();
++
+     server_init_process_done();
+ }
+ 
+--- a/dlls/wined3d/directx.c
++++ b/dlls/wined3d/directx.c
+@@ -3515,6 +3515,35 @@
+     return ret;
+ }
+ 
++/* WineWrap hack: programs named in WINEWRAP_WINED3D_APPS (';'-separated exe
++ * names) run on wined3d instead of D3DMetal because they draw with D3D10
++ * devices; MoltenVK cannot create those either, so they get OpenGL. */
++static BOOL winewrap_wants_opengl(void)
++{
++    const char *apps = getenv("WINEWRAP_WINED3D_APPS");
++    char path[MAX_PATH], *name;
++    size_t len;
++
++    if (!apps || !GetModuleFileNameA(NULL, path, ARRAY_SIZE(path)))
++        return FALSE;
++    name = strrchr(path, '\\');
++    name = name ? name + 1 : path;
++    len = strlen(name);
++
++    while (*apps)
++    {
++        const char *end = strchr(apps, ';');
++        size_t n = end ? end - apps : strlen(apps);
++
++        if (n == len && !_strnicmp(apps, name, n))
++            return TRUE;
++        if (!end)
++            break;
++        apps = end + 1;
++    }
++    return FALSE;
++}
++
+ static struct wined3d_adapter *wined3d_adapter_create(unsigned int ordinal, DWORD wined3d_creation_flags)
+ {
+     struct wined3d_adapter *adapter = NULL;
+@@ -3525,7 +3554,7 @@
+     if (wined3d_settings.renderer == WINED3D_RENDERER_VULKAN)
+         return wined3d_adapter_vk_create(ordinal, wined3d_creation_flags);
+ 
+-    if (wined3d_settings.renderer == WINED3D_RENDERER_OPENGL)
++    if (wined3d_settings.renderer == WINED3D_RENDERER_OPENGL || winewrap_wants_opengl())
+         return wined3d_adapter_gl_create(ordinal, wined3d_creation_flags);
+ 
+     /* CW HACK 18311: Use the Vulkan renderer on macOS. */

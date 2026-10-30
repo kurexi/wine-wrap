@@ -98,6 +98,13 @@ impl WineRuntime {
             || matches!(self.kind, RuntimeKind::GamePortingToolkit)
     }
 
+    /// The DLL tree WineWrap grafted D3DMetal into, if any. Builds that ship
+    /// D3DMetal in place of Wine's own DLLs have none.
+    pub fn d3dmetal_dll_dir(&self) -> Option<PathBuf> {
+        let dir = self.root.join("lib").join(crate::d3dmetal::D3DMETAL_DIR);
+        dir.join("x86_64-windows/dxgi.dll").is_file().then_some(dir)
+    }
+
     /// Ask the runtime for its version (`wine --version`).
     pub fn version(&self) -> Option<String> {
         let out = Command::new(self.wine()).arg("--version").output().ok()?;

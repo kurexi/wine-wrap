@@ -102,6 +102,24 @@ impl WineWrap {
         self.save_config()
     }
 
+    /// Graft Apple's D3DMetal (DirectX 12 → Metal) from a Game Porting Toolkit
+    /// install into a Wine runtime, so its bottles can use the D3DMetal graphics
+    /// backend. `gptk` is an install directory or a mounted
+    /// `Game Porting Toolkit-*.dmg`. Returns the runtime, now reporting
+    /// `has_d3dmetal()`.
+    pub fn install_d3dmetal(&self, runtime: &str, gptk: &Path) -> Result<WineRuntime> {
+        let rt = self.runtime(runtime)?;
+        crate::d3dmetal::D3DMetalSource::locate(gptk)?.graft_into(&rt.root)?;
+        self.runtime(runtime)
+    }
+
+    /// Remove a previously grafted D3DMetal from a runtime, restoring its
+    /// original built-in DirectX DLLs.
+    pub fn remove_d3dmetal(&self, runtime: &str) -> Result<()> {
+        let rt = self.runtime(runtime)?;
+        crate::d3dmetal::remove(&rt.root)
+    }
+
     /// The runtime a bottle should run with.
     pub fn runtime_for(&self, bottle: &Bottle) -> Result<WineRuntime> {
         match &bottle.config.runtime {

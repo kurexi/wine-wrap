@@ -29,8 +29,11 @@ launch your games.
   [Gcenx/macOS_Wine_builds](https://github.com/Gcenx/macOS_Wine_builds) (the same
   builds Homebrew's `wine-stable` cask uses) into WineWrap's own folder.
 
-  For DirectX 12 games, use a build that includes Apple's D3DMetal, such as the
-  [Game Porting Toolkit](https://developer.apple.com/games/game-porting-toolkit/).
+  For DirectX 12 games, you need Apple's D3DMetal (DirectX 12 → Metal). Its
+  license forbids redistribution, so WineWrap doesn't bundle it: download the
+  [Game Porting Toolkit](https://developer.apple.com/games/game-porting-toolkit/)
+  yourself and graft D3DMetal into a runtime (see
+  [DirectX 12 with D3DMetal](#directx-12-with-d3dmetal)).
 
 ## Building
 
@@ -162,6 +165,43 @@ Steam library the next time Steam starts, so it shows up in Steam's install
 dialog. The disk should be formatted APFS or Mac OS Extended: macOS can't
 write to NTFS, and exFAT works but is slower. While the disk is unplugged,
 Steam shows the games on it as not installed.
+
+## DirectX 12 with D3DMetal
+
+Modern DirectX 12 games (Unreal Engine 5 and similar) need Apple's D3DMetal to
+translate Direct3D 12 to Metal. WineWrap's own Wine build ships vkd3d over
+MoltenVK, which only reaches Direct3D feature level 11_0 — enough to create a
+device, but not to run feature-level-12 games. D3DMetal reaches feature level
+12.
+
+Apple's license doesn't allow redistributing D3DMetal, so you supply it:
+
+1. Download the
+   [Game Porting Toolkit](https://developer.apple.com/games/game-porting-toolkit/)
+   (free with an Apple ID). Open the `.dmg`, then open the
+   **Evaluation environment for Windows games** image inside it to mount it. You
+   don't have to install anything else — the graft copies what it needs.
+2. Graft D3DMetal into the runtime a bottle uses (for Steam bottles that's the
+   managed `wine-winewrap-*` build), pointing at the mounted volume:
+
+   ```bash
+   winewrap runtime install-d3dmetal wine-winewrap-26.3.0-3 "/Volumes/Evaluation environment for Windows games 4.0 beta 3"
+   ```
+
+   You can eject the images afterwards: everything D3DMetal needs is copied into
+   the build.
+
+3. Switch the bottle's graphics backend to D3DMetal:
+
+   ```bash
+   winewrap bottle set Steam graphics d3dmetal
+   ```
+
+This copies `D3DMetal.framework`, `libd3dshared.dylib` and the D3DMetal
+`d3d12`/`dxgi` DLLs into the build, next to (not over) Wine's own. Games get
+D3DMetal; a few programs it can't serve, such as the Rockstar Games Launcher,
+keep Wine's Direct3D. To undo the graft, run
+`winewrap runtime remove-d3dmetal <runtime>`.
 
 ## Troubleshooting
 

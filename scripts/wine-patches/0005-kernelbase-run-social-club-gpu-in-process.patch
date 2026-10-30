@@ -1,0 +1,42 @@
+kernelbase: Run Rockstar Social Club's Chromium GPU work in-process.
+
+The Rockstar Games Launcher's sign-in window belongs to SocialClubHelper.exe,
+a Chromium (CEF) browser. Like steamwebhelper (patch 0001), its GPU process
+draws into windows the browser process owns, which winemac doesn't present,
+so the window is empty and transparent. --disable-gpu alone isn't enough:
+the compositor still runs in a separate GPU process. Append
+--in-process-gpu --disable-gpu to the main SocialClubHelper.exe command line;
+child processes (--type=...) are untouched.
+
+Applies on top of 0001, to the Wine tree in CodeWeavers' crossover-sources
+(26.3.0).
+
+--- a/dlls/kernelbase/process.c
++++ b/dlls/kernelbase/process.c
+@@ -567,6 +567,26 @@
+         if (new_cmdline)
+         {
+             FIXME( "HACK: running steamwebhelper's GPU work in-process\n" );
++            memcpy( new_cmdline, tidy_cmdline, len * sizeof(WCHAR) );
++            memcpy( new_cmdline + len, extraW, sizeof(extraW) );
++            if (tidy_cmdline != cmd_line) HeapFree( GetProcessHeap(), 0, tidy_cmdline );
++            tidy_cmdline = new_cmdline;
++        }
++    }
++
++    /* WineWrap hack: Rockstar's Social Club (sign-in, launcher UI) is Chromium
++     * too and has the same problem as steamwebhelper above: its GPU process
++     * draws into windows the browser process owns, so they stay empty. */
++    if (tidy_cmdline && wcsstr( tidy_cmdline, L"SocialClubHelper.exe" ) &&
++        !wcsstr( tidy_cmdline, L"--type=" ) && !wcsstr( tidy_cmdline, L"--in-process-gpu" ))
++    {
++        static const WCHAR extraW[] = L" --in-process-gpu --disable-gpu";
++        size_t len = lstrlenW( tidy_cmdline );
++        WCHAR *new_cmdline = RtlAllocateHeap( GetProcessHeap(), 0, (len + ARRAY_SIZE(extraW)) * sizeof(WCHAR) );
++
++        if (new_cmdline)
++        {
++            FIXME( "HACK: running Social Club's GPU work in-process\n" );
+             memcpy( new_cmdline, tidy_cmdline, len * sizeof(WCHAR) );
+             memcpy( new_cmdline + len, extraW, sizeof(extraW) );
+             if (tidy_cmdline != cmd_line) HeapFree( GetProcessHeap(), 0, tidy_cmdline );
