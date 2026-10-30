@@ -15,11 +15,18 @@ fn main() -> eframe::Result {
         )
         .init();
 
+    let mut viewport = eframe::egui::ViewportBuilder::default()
+        .with_title("WineWrap")
+        .with_inner_size([960.0, 640.0])
+        .with_min_inner_size([720.0, 480.0]);
+    // The .app bundle has its own icon; this one shows when running unbundled
+    // (`cargo run`), in the Dock and window switcher.
+    match eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon.png")) {
+        Ok(icon) => viewport = viewport.with_icon(icon),
+        Err(e) => tracing::warn!("could not load the app icon: {e}"),
+    }
     let options = eframe::NativeOptions {
-        viewport: eframe::egui::ViewportBuilder::default()
-            .with_title("WineWrap")
-            .with_inner_size([960.0, 640.0])
-            .with_min_inner_size([720.0, 480.0]),
+        viewport,
         ..Default::default()
     };
     eframe::run_native(

@@ -88,6 +88,7 @@ cp "$stage/bin/winewrap" "$app/Contents/Helpers/winewrap"
 sed -e "s/@VERSION@/$version/" -e "s/@BUILD@/$build_number/" \
     packaging/macos/Info.plist >"$app/Contents/Info.plist"
 plutil -lint "$app/Contents/Info.plist"
+cp packaging/macos/AppIcon.icns "$app/Contents/Resources/AppIcon.icns"
 sign "$app/Contents/Helpers/winewrap"
 sign "$app"
 codesign --verify --deep --strict "$app"
