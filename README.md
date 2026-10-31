@@ -11,6 +11,8 @@
 
 <p align="center">
   <a href="https://github.com/hashspace-apps/wine-wrap/releases"><b>⬇ Download for macOS</b></a>
+  ·
+  <a href="README.zh-CN.md">简体中文</a>
 </p>
 
 ![Red Dead Redemption running on a Mac through WineWrap](screenshots/red-dead-redemption.png)
