@@ -1210,7 +1210,7 @@ where
 /// Whether starting Steam in a bottle with this config first switches it to
 /// WineWrap's Wine build (see `WineWrap::use_steam_runtime`).
 fn needs_steam_runtime(config: &BottleConfig) -> bool {
-    cfg!(target_os = "macos") && steam::needs_winewrap_runtime(config)
+    steam::needs_winewrap_runtime(config)
 }
 
 /// Move a Steam bottle to WineWrap's Wine build, downloading it if needed, and
@@ -1312,12 +1312,7 @@ fn install_steam_job(
 }
 
 fn open_in_file_manager(path: &Path) {
-    let opener = if cfg!(target_os = "macos") {
-        "open"
-    } else {
-        "xdg-open"
-    };
-    if let Err(e) = std::process::Command::new(opener).arg(path).spawn() {
+    if let Err(e) = std::process::Command::new("open").arg(path).spawn() {
         tracing::warn!("could not open {}: {e}", path.display());
     }
 }

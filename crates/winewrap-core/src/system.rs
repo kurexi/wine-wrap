@@ -35,7 +35,7 @@ pub fn rosetta_installed() -> bool {
 
 /// Whether this Mac needs Rosetta 2 installed before Wine can run.
 pub fn needs_rosetta() -> bool {
-    cfg!(all(target_os = "macos", target_arch = "aarch64")) && !rosetta_installed()
+    !rosetta_installed()
 }
 
 /// Install Rosetta 2. Runs through `osascript` so macOS shows its standard
@@ -50,31 +50,14 @@ pub fn rosetta_install_command() -> crate::launch::LaunchSpec {
 
 /// Checks that only depend on the host, not on WineWrap's own state.
 pub fn host_checks() -> Vec<Check> {
-    let mut checks = Vec::new();
-    let os = std::env::consts::OS;
-    let arch = std::env::consts::ARCH;
-
-    checks.push(if os == "macos" {
-        Check::new("Operating system", Status::Ok, format!("macOS ({arch})"))
+    vec![if rosetta_installed() {
+        Check::new("Rosetta 2", Status::Ok, "installed")
     } else {
         Check::new(
-            "Operating system",
-            Status::Warning,
-            format!("{os} ({arch}): WineWrap targets macOS, other platforms are best-effort"),
+            "Rosetta 2",
+            Status::Error,
+            "not installed; WineWrap can install it, or run \
+             `softwareupdate --install-rosetta --agree-to-license`",
         )
-    });
-
-    if os == "macos" && arch == "aarch64" {
-        checks.push(if rosetta_installed() {
-            Check::new("Rosetta 2", Status::Ok, "installed")
-        } else {
-            Check::new(
-                "Rosetta 2",
-                Status::Error,
-                "not installed; WineWrap can install it, or run \
-                 `softwareupdate --install-rosetta --agree-to-license`",
-            )
-        });
-    }
-    checks
+    }]
 }

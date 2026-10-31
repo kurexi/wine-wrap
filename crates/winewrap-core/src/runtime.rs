@@ -231,8 +231,9 @@ fn toolkit_candidates(home: Option<&Path>) -> Vec<Candidate> {
     out
 }
 
-/// Package-manager installs (Homebrew on Apple Silicon / Intel, Linux
-/// distros). Homebrew casks symlink into these, which resolve_root follows.
+/// Homebrew installs: `/opt/homebrew` (native) and `/usr/local` (the x86_64
+/// Homebrew run under Rosetta). Casks symlink into these, which resolve_root
+/// follows.
 fn prefix_candidates() -> Vec<Candidate> {
     let mut out = Vec::new();
     let mut push = |name: &str, root: PathBuf, kind| {
@@ -244,17 +245,6 @@ fn prefix_candidates() -> Vec<Candidate> {
     };
     push("homebrew", "/opt/homebrew".into(), RuntimeKind::System);
     push("usr-local", "/usr/local".into(), RuntimeKind::System);
-    push("system", "/usr".into(), RuntimeKind::System);
-    push(
-        "opt-wine-stable",
-        "/opt/wine-stable".into(),
-        RuntimeKind::System,
-    );
-    push(
-        "opt-wine-staging",
-        "/opt/wine-staging".into(),
-        RuntimeKind::System,
-    );
 
     out
 }
@@ -333,18 +323,13 @@ pub(crate) mod tests {
     use super::*;
 
     /// A directory reached through a symlink, like macOS temp dirs
-    /// (`/var` -> `/private/var`), so tests on Linux see the same paths.
+    /// (`/var` -> `/private/var`).
     pub(crate) fn symlinked_dir(base: &Path) -> PathBuf {
         let real = base.join("real");
         std::fs::create_dir_all(&real).unwrap();
-        #[cfg(unix)]
-        {
-            let link = base.join("link");
-            std::os::unix::fs::symlink(&real, &link).unwrap();
-            link
-        }
-        #[cfg(not(unix))]
-        real
+        let link = base.join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        link
     }
 
     /// Create a fake Wine install prefix for tests.
@@ -373,7 +358,6 @@ pub(crate) mod tests {
         assert_eq!(resolve_root(dir.path()), None);
     }
 
-    #[cfg(unix)]
     #[test]
     fn follows_homebrew_style_symlinks_and_dedupes() {
         let dir = tempfile::tempdir().unwrap();

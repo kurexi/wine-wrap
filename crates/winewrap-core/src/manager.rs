@@ -173,14 +173,12 @@ impl WineWrap {
     /// Point a Steam bottle's settings at WineWrap's own Wine build,
     /// downloading it first if needed, when [`steam::needs_winewrap_runtime`]
     /// says so. Returns whether `config` changed; the caller saves it.
-    ///
-    /// Does nothing off macOS, where that build doesn't run.
     pub fn use_steam_runtime(
         &self,
         config: &mut BottleConfig,
         progress: impl FnMut(InstallProgress),
     ) -> Result<bool> {
-        if !cfg!(target_os = "macos") || !steam::needs_winewrap_runtime(config) {
+        if !steam::needs_winewrap_runtime(config) {
             return Ok(false);
         }
         let build = wine_builds::winewrap_build();
@@ -300,15 +298,10 @@ mod tests {
         let mut cfg = BottleConfig::new("Steam");
         cfg.runtime = Some("wine-stable-11.0".into());
         let changed = ww.use_steam_runtime(&mut cfg, |_| {}).unwrap();
-        if cfg!(target_os = "macos") {
-            assert!(changed);
-            assert_eq!(cfg.runtime.as_deref(), Some(name.as_str()));
-            // Already moved: nothing more to do.
-            assert!(!ww.use_steam_runtime(&mut cfg, |_| {}).unwrap());
-        } else {
-            assert!(!changed);
-            assert_eq!(cfg.runtime.as_deref(), Some("wine-stable-11.0"));
-        }
+        assert!(changed);
+        assert_eq!(cfg.runtime.as_deref(), Some(name.as_str()));
+        // Already moved: nothing more to do.
+        assert!(!ww.use_steam_runtime(&mut cfg, |_| {}).unwrap());
 
         let mut custom = BottleConfig::new("Steam");
         custom.runtime = Some("gptk".into());

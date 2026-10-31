@@ -46,7 +46,7 @@ WineWrap 底层使用 [Wine](https://www.winehq.org/)（CrossOver 里用的也�
 
 ## 快速上手
 
-需要 **macOS 13 或更高版本** 的 Mac。Apple 芯片（M1–M4）和 Intel 芯片都可以。
+需要搭载 **Apple 芯片**（M1 或更新）且系统为 **macOS 13 或更高版本** 的 Mac。不支持 Intel 芯片的 Mac。
 
 1. **下载**：从[最新版本](https://github.com/hashspace-apps/wine-wrap/releases)
    下载 `WineWrap-*.dmg`，打开后把 **WineWrap** 拖进 **应用程序（Applications）**
@@ -56,7 +56,7 @@ WineWrap 底层使用 [Wine](https://www.winehq.org/)（CrossOver 里用的也�
    **仍要打开**。（也可以在终端里运行
    `xattr -dr com.apple.quarantine /Applications/WineWrap.app`。）
 3. **安装 Steam**：点击 **⬇ Install Steam**。WineWrap 会自动下载 Wine 和 Steam；
-   在 Apple 芯片的 Mac 上，如果缺少 Rosetta 2，它也会提示你安装。
+   如果缺少 Rosetta 2，它也会提示你安装。
 4. **开玩**：点击 **▶ Launch Steam**，登录，安装游戏，然后点 **▶ Play**。
 
 如果 Steam 在局域网传输游戏时找不到你的其他电脑，请到 **系统设置 → 隐私与安全性

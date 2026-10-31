@@ -366,7 +366,6 @@ mod tests {
         assert_eq!(stages, [InstallProgress::Extracting]);
         assert_eq!(rt.name, "wine-stable-10.0");
         assert!(rt.wine().is_file());
-        #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
             let mode = std::fs::metadata(rt.wine()).unwrap().permissions().mode();
