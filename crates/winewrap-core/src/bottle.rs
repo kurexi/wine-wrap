@@ -284,7 +284,6 @@ impl Bottle {
                 tracing::warn!("{}: not replacing {}", self.name(), path.display());
                 continue;
             }
-            #[cfg(unix)]
             std::os::unix::fs::symlink(target, &path).at(&path)?;
         }
         Ok(())
@@ -541,7 +540,6 @@ mod tests {
         }
     }
 
-    #[cfg(unix)]
     #[test]
     fn drives_become_dosdevices_links() {
         let dir = tempfile::tempdir().unwrap();
@@ -580,7 +578,6 @@ mod tests {
         assert!(dosdevices.join("d:").is_symlink() && dosdevices.join("z:").is_symlink());
     }
 
-    #[cfg(unix)]
     #[test]
     fn documents_stay_inside_the_bottle() {
         let dir = tempfile::tempdir().unwrap();
@@ -629,7 +626,6 @@ mod tests {
         assert!(b.install_dxvk(dir.path()).is_err());
     }
 
-    #[cfg(unix)]
     #[test]
     fn kill_treats_exit_1_as_nothing_running() {
         use std::os::unix::fs::PermissionsExt;

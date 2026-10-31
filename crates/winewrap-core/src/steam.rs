@@ -357,7 +357,6 @@ mod tests {
         assert!(!with(Some("my-wine")));
     }
 
-    #[cfg(unix)]
     #[test]
     fn game_folders_become_steam_libraries() {
         let dir = tempfile::tempdir().unwrap();
@@ -430,7 +429,6 @@ mod tests {
         )
         .unwrap();
         std::fs::create_dir_all(dir.path().join("dosdevices")).unwrap();
-        #[cfg(unix)]
         std::os::unix::fs::symlink(&lib2, dir.path().join("dosdevices/d:")).unwrap();
 
         std::fs::write(
@@ -448,7 +446,6 @@ mod tests {
             .iter()
             .map(|g| (g.app_id, g.name.as_str(), g.fully_installed))
             .collect();
-        #[cfg(unix)]
         assert_eq!(
             names,
             vec![(70, "Half-Life", false), (620, "Portal 2", true)]

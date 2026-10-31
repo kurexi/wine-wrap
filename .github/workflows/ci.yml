@@ -42,12 +42,8 @@ jobs:
       - run: cargo fmt --all --check
 
   clippy:
-    name: Clippy (${{ matrix.os }})
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, ubuntu-latest]
-    runs-on: ${{ matrix.os }}
+    name: Clippy
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -57,18 +53,8 @@ jobs:
       - run: cargo clippy --workspace --all-targets --locked
 
   test:
-    name: Test (${{ matrix.name }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: macOS arm64
-            os: macos-latest
-          - name: macOS x86_64
-            os: macos-15-intel
-          - name: Linux
-            os: ubuntu-latest
-    runs-on: ${{ matrix.os }}
+    name: Test
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -85,7 +71,7 @@ jobs:
 
   msrv:
     name: Minimum Rust version
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v7
       - name: Read rust-version from manifests
@@ -153,13 +139,13 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin, x86_64-apple-darwin
+          targets: aarch64-apple-darwin
       - uses: Swatinem/rust-cache@v2
-      - name: Build universal .app, .dmg and CLI tarball (ad-hoc signed)
+      - name: Build .app, .dmg and CLI tarball (ad-hoc signed)
         env:
           VERSION: 0.0.0-ci.${{ github.run_number }}
           BUILD_NUMBER: ${{ github.run_number }}
-        run: scripts/package-macos.sh universal
+        run: scripts/package-macos.sh
       - name: Smoke-test the packaged app
         timeout-minutes: 10
         env:

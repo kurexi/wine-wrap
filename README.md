@@ -49,7 +49,7 @@ Rockstar games work.
 
 ## Get started
 
-You need a Mac with **macOS 13 or later**. Apple Silicon (M1–M4) and Intel both work.
+You need an **Apple Silicon** Mac (M1 or later) with **macOS 13 or later**. Intel Macs are not supported.
 
 1. **Download** `WineWrap-*.dmg` from the
    [latest release](https://github.com/hashspace-apps/wine-wrap/releases),
@@ -59,8 +59,7 @@ You need a Mac with **macOS 13 or later**. Apple Silicon (M1–M4) and Intel bot
    Security** and click **Open Anyway**. (Or run
    `xattr -dr com.apple.quarantine /Applications/WineWrap.app` in Terminal.)
 3. **Install Steam.** Click **⬇ Install Steam**. WineWrap downloads Wine and
-   Steam for you; on Apple Silicon it also offers to install Rosetta 2 if it's
-   missing.
+   Steam for you, and offers to install Rosetta 2 if it's missing.
 4. **Play.** Click **▶ Launch Steam**, sign in, install a game, and hit
    **▶ Play**.
 
@@ -117,8 +116,8 @@ live, building from source and how releases are made.
 
 ### Requirements
 
-* macOS 13+ (Apple Silicon or Intel). Linux works for development and with a system Wine.
-* **Rosetta 2** on Apple Silicon. The app offers to install it if it's missing.
+* macOS 13+ on Apple Silicon.
+* **Rosetta 2**, since Wine is an x86_64 program. The app offers to install it if it's missing.
 * **Wine.** If none is found, click **Install Wine** in the app, or run
   `winewrap runtime install`. This downloads a prebuilt macOS Wine from
   [Gcenx/macOS_Wine_builds](https://github.com/Gcenx/macOS_Wine_builds) (the same
@@ -141,11 +140,7 @@ To build a double-clickable `WineWrap.app` in a `.dmg`, plus a CLI tarball,
 run this on a Mac. It writes to `dist/`:
 
 ```bash
-scripts/package-macos.sh            # universal (Apple Silicon + Intel)
-```
-
-```bash
-scripts/package-macos.sh native     # current architecture only, faster
+scripts/package-macos.sh
 ```
 
 Prebuilt downloads are attached to each
@@ -322,7 +317,7 @@ LGPL [CrossOver source](https://www.codeweavers.com/crossover/source) (Wine 11.0
 base) plus the patches in `scripts/wine-patches/`, which make Steam's UI show.
 Wine's Windows-side DLLs are compiled with a MinGW GCC toolchain that the script
 also builds: with clang (llvm-mingw), Steam never connects to its servers.
-It needs Xcode (and Rosetta on Apple Silicon), but no Homebrew or MacPorts:
+It needs Xcode and Rosetta, but no Homebrew or MacPorts:
 every dependency is downloaded with a pinned checksum and built into the work
 directory. A first build takes about an hour; the toolchain is reused after that.
 
@@ -366,8 +361,8 @@ GitHub Actions workflows live in `.github/workflows/`:
 
 | Workflow | Runs on | Does |
 |---|---|---|
-| `ci.yml` | every push to `master`, every pull request, manual runs | `cargo fmt --check`; clippy on macOS and Linux; tests on macOS arm64, macOS x86_64 and Linux; a minimum Rust version check (1.88 for core/CLI, 1.95 for the GUI); `cargo deny` (licenses, RustSec advisories, crate sources); then builds the universal `.dmg`, launches it on a Mac runner as a smoke test, and (on `master` or manual runs) publishes it as a `dev-<run>` pre-release, deleting the previous one |
-| `release.yml` | pushing a `v*.*.*` tag | checks that the tag matches `Cargo.toml`, runs CI, builds the macOS `.dmg`, the macOS CLI tarball and a Linux CLI tarball, uploads them to a draft GitHub release and publishes it with `SHA256SUMS.txt` |
+| `ci.yml` | every push to `master`, every pull request, manual runs | `cargo fmt --check`; clippy on macOS; tests on macOS; a minimum Rust version check (1.88 for core/CLI, 1.95 for the GUI); `cargo deny` (licenses, RustSec advisories, crate sources); then builds the `.dmg`, launches it on a Mac runner as a smoke test, and (on `master` or manual runs) publishes it as a `dev-<run>` pre-release, deleting the previous one |
+| `release.yml` | pushing a `v*.*.*` tag | checks that the tag matches `Cargo.toml`, runs CI, builds the macOS `.dmg` and the macOS CLI tarball, uploads them to a draft GitHub release and publishes it with `SHA256SUMS.txt` |
 
 Dependabot (`.github/dependabot.yml`) opens weekly update PRs for crates and actions.
 

@@ -1,7 +1,7 @@
 name: Release
 
 # Push a tag like `v0.2.0` (matching the version in Cargo.toml) to publish a
-# GitHub release with a macOS .dmg, macOS CLI tarball and Linux CLI tarball.
+# GitHub release with a macOS .dmg and macOS CLI tarball.
 on:
   push:
     tags: ["v*.*.*"]
@@ -85,7 +85,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin, x86_64-apple-darwin
+          targets: aarch64-apple-darwin
 
       # Optional Developer ID signing + notarization. Without these secrets
       # the app is ad-hoc signed and users must clear Gatekeeper's quarantine
@@ -121,7 +121,7 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-        run: scripts/package-macos.sh universal
+        run: scripts/package-macos.sh
 
       - name: Remove signing keychain
         if: always() && steps.signing.outputs.identity != ''
@@ -133,34 +133,9 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: gh release upload "$TAG" dist/* --clobber
 
-  linux:
-    name: Build Linux CLI
-    needs: [verify, draft]
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
-      - name: Build and package
-        env:
-          VERSION: ${{ needs.verify.outputs.version }}
-        run: |
-          cargo build --release --locked -p winewrap-cli
-          name="winewrap-$VERSION-linux-x86_64"
-          mkdir -p "dist/$name"
-          cp target/release/winewrap README.md LICENSE "dist/$name/"
-          tar -C dist -czf "dist/$name.tar.gz" "$name"
-          rm -r "dist/$name"
-      - name: Upload to release
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: gh release upload "$TAG" dist/* --clobber
-
   publish:
     name: Publish GitHub release
-    needs: [verify, macos, linux]
+    needs: [verify, macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write

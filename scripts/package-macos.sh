@@ -2,10 +2,10 @@
 # Build WineWrap for macOS and package it for distribution.
 #
 # Produces, in ./dist:
-#   WineWrap-<version>-macos-<arch>.dmg      the WineWrap.app desktop app
-#   winewrap-<version>-macos-<arch>.tar.gz   the `winewrap` command-line tool
+#   WineWrap-<version>-macos-arm64.dmg      the WineWrap.app desktop app
+#   winewrap-<version>-macos-arm64.tar.gz   the `winewrap` command-line tool
 #
-# Usage: scripts/package-macos.sh [universal|native]   (default: universal)
+# Usage: scripts/package-macos.sh   (Apple Silicon only)
 #
 # Optional environment:
 #   VERSION                  version string (default: from Cargo.toml)
@@ -17,7 +17,6 @@
 #                            (requires MACOS_SIGNING_IDENTITY)
 set -euo pipefail
 
-mode="${1:-universal}"
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
 
@@ -30,42 +29,22 @@ version="${VERSION:-$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)
 build_number="${BUILD_NUMBER:-$version}"
 export MACOSX_DEPLOYMENT_TARGET=13.0
 
-case "$mode" in
-    universal)
-        arch_label=universal
-        targets=(aarch64-apple-darwin x86_64-apple-darwin)
-        ;;
-    native)
-        arch_label="$(uname -m)"
-        [[ "$arch_label" == arm64 ]] && arch_label=aarch64
-        targets=("${arch_label}-apple-darwin")
-        ;;
-    *)
-        echo "usage: $0 [universal|native]" >&2
-        exit 2
-        ;;
-esac
+arch_label=arm64
+target=aarch64-apple-darwin
 
 echo "==> Building WineWrap $version ($arch_label)"
-rustup target add "${targets[@]}" >/dev/null
-for target in "${targets[@]}"; do
-    cargo build --release --locked --target "$target" -p winewrap-cli -p winewrap-gui
-done
+rustup target add "$target" >/dev/null
+cargo build --release --locked --target "$target" -p winewrap-cli -p winewrap-gui
 
 dist="$root/dist"
 stage="$(mktemp -d)"
 trap 'rm -rf "$stage"' EXIT
 mkdir -p "$dist" "$stage/bin"
 
-# Merge per-architecture binaries into one (a no-op copy for native builds).
 # Binary names must differ by more than case: macOS file systems are
 # case-insensitive, so `winewrap` and `WineWrap` would be the same file.
 for bin in winewrap winewrap-gui; do
-    inputs=()
-    for target in "${targets[@]}"; do
-        inputs+=("target/$target/release/$bin")
-    done
-    lipo -create "${inputs[@]}" -output "$stage/bin/$bin"
+    cp "target/$target/release/$bin" "$stage/bin/$bin"
 done
 lipo -info "$stage/bin/winewrap" "$stage/bin/winewrap-gui"
 

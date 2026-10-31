@@ -15,6 +15,9 @@
 //! executed afterwards, which keeps them testable and lets front ends offer a
 //! dry-run mode.
 
+#[cfg(not(all(target_os = "macos", target_arch = "aarch64")))]
+compile_error!("WineWrap only supports macOS on Apple Silicon (aarch64-apple-darwin).");
+
 pub mod bottle;
 pub mod config;
 pub mod d3dmetal;
