@@ -73,7 +73,12 @@ Tested on an M4 Mac.
 | Game | Works? | Notes |
 | --- | --- | --- |
 | Red Dead Redemption | ✅ Yes | 60 FPS. Needs D3DMetal. Starts through the Rockstar Games Launcher; Social Club sign-in and Xbox controller work. |
+| Grand Theft Auto IV: The Complete Edition | ✅ Yes | Starts through the Rockstar Games Launcher. It keeps its settings and profiles in Documents, so if macOS asks whether WineWrap may use your Documents folder, allow it. |
 | Phantom Blade Zero | ❌ No | Its Denuvo DRM crashes before the game shows anything (it fails in CrossOver too). |
+
+![Grand Theft Auto IV running on a Mac through WineWrap](screenshots/GTA-IV.png)
+
+<p align="center"><i>Grand Theft Auto IV on an M4 Mac.</i></p>
 
 Tried another game? Open an issue and tell us how it went.
 
