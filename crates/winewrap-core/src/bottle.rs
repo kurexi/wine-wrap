@@ -402,6 +402,31 @@ impl Bottle {
 /// Normalise a drive letter for [`BottleConfig::drives`] (`"D:"` → `"d"`).
 /// Only D: to Y: are allowed: Wine uses C: for the bottle and Z: for the Mac's
 /// whole file system.
+/// Give every user in the prefix a real Documents folder inside the bottle.
+///
+/// When Wine finds `C:\users\<user>\Documents` missing, it links it to
+/// `~/Documents`, which macOS only lets an app use after a privacy prompt. If
+/// that was denied, games can't save there (Rockstar keeps profiles and logs
+/// in it) and fail with no clear error. Wine leaves a real folder alone.
+pub(crate) fn keep_documents_in_prefix(prefix: &Path) -> Result<()> {
+    let users = prefix.join("drive_c").join("users");
+    let Ok(entries) = std::fs::read_dir(&users) else {
+        return Ok(());
+    };
+    for entry in entries.flatten() {
+        let user = entry.path();
+        if !user.is_dir() || user.is_symlink() {
+            continue;
+        }
+        let docs = user.join("Documents");
+        if docs.is_symlink() {
+            std::fs::remove_file(&docs).at(&docs)?;
+        }
+        std::fs::create_dir_all(&docs).at(&docs)?;
+    }
+    Ok(())
+}
+
 pub fn drive_letter(s: &str) -> std::result::Result<String, String> {
     match s.trim_end_matches(':').to_ascii_lowercase().as_bytes() {
         [c @ b'd'..=b'y'] => Ok(char::from(*c).to_string()),
@@ -553,6 +578,31 @@ mod tests {
         b.save().unwrap();
         assert!(!dosdevices.join("e:").is_symlink());
         assert!(dosdevices.join("d:").is_symlink() && dosdevices.join("z:").is_symlink());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn documents_stay_inside_the_bottle() {
+        let dir = tempfile::tempdir().unwrap();
+        let mac_docs = dir.path().join("Mac/Documents");
+        std::fs::create_dir_all(&mac_docs).unwrap();
+        std::fs::write(mac_docs.join("mine.txt"), "x").unwrap();
+        let users = dir.path().join("b/drive_c/users");
+        std::fs::create_dir_all(users.join("crossover")).unwrap();
+        let docs = users.join("crossover/Documents");
+        std::os::unix::fs::symlink(&mac_docs, &docs).unwrap();
+
+        keep_documents_in_prefix(&dir.path().join("b")).unwrap();
+        assert!(docs.is_dir() && !docs.is_symlink());
+        // The Mac's folder is untouched.
+        assert!(mac_docs.join("mine.txt").is_file());
+
+        // Running again keeps what games saved.
+        std::fs::write(docs.join("save.dat"), "y").unwrap();
+        keep_documents_in_prefix(&dir.path().join("b")).unwrap();
+        assert!(docs.join("save.dat").is_file());
+        // A prefix wineboot hasn't populated yet is fine.
+        keep_documents_in_prefix(&dir.path().join("missing")).unwrap();
     }
 
     #[test]

@@ -97,6 +97,7 @@ impl LaunchSpec {
     /// Run to completion and return the exit status; only failing to start
     /// is an error.
     pub fn status(&self) -> Result<ExitStatus> {
+        self.prepare_prefix();
         self.to_command()
             .status()
             .map_err(|e| self.command_error(e.to_string()))
@@ -133,6 +134,7 @@ impl LaunchSpec {
         let log_path = logs_dir.join(format!("{safe_label}-{stamp}.log"));
         let log = File::create(&log_path).at(&log_path)?;
         let log_err = log.try_clone().at(&log_path)?;
+        self.prepare_prefix();
         let child = self
             .to_command()
             .stdin(Stdio::null())
@@ -141,6 +143,17 @@ impl LaunchSpec {
             .spawn()
             .map_err(|e| self.command_error(e.to_string()))?;
         Ok((child, log_path))
+    }
+
+    /// Fix up the bottle this runs in, if any, just before it starts. Wine
+    /// may have re-linked its Documents folder to the Mac's since last time.
+    fn prepare_prefix(&self) {
+        let Some(prefix) = self.env.get("WINEPREFIX") else {
+            return;
+        };
+        if let Err(e) = crate::bottle::keep_documents_in_prefix(Path::new(prefix)) {
+            tracing::warn!("could not keep Documents inside the bottle: {e}");
+        }
     }
 
     pub(crate) fn command_error(&self, message: String) -> Error {
