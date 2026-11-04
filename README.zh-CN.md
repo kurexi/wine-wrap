@@ -73,12 +73,17 @@ WineWrap 底层使用 [Wine](https://www.winehq.org/)（CrossOver 里用的也�
 | 游戏 | 能玩吗？ | 说明 |
 | --- | --- | --- |
 | 荒野大镖客（Red Dead Redemption） | ✅ 能 | 60 FPS。需要 D3DMetal。通过 Rockstar Games 启动器启动；Social Club 登录和 Xbox 手柄都正常。 |
+| 荒野大镖客：救赎 2（Red Dead Redemption 2） | ✅ 能 | 60 FPS。需要 D3DMetal。WineWrap 会把它设成 DirectX 12，因为它默认的 Vulkan 渲染器一启动就崩溃。不要在游戏设置里把它改回 Vulkan。启动时会提示一次 AMD 驱动过旧，点"确定"即可。要全屏的话，在 设置 → 图形 里选全屏、1280 × 800。 |
 | 侠盗猎车手 IV：完全版（Grand Theft Auto IV: The Complete Edition） | ✅ 能 | 通过 Rockstar Games 启动器启动。它的设置和存档放在容器自己的"文档"文件夹里，不会碰你 Mac 上的 `~/Documents`。 |
 | 影之刃零（Phantom Blade Zero） | ❌ 不能 | 它的 Denuvo DRM 在游戏画面出现前就崩溃了（在 CrossOver 里也一样）。 |
 
 ![通过 WineWrap 在 Mac 上运行的《侠盗猎车手 IV》](screenshots/GTA-IV.png)
 
 <p align="center"><i>《侠盗猎车手 IV》在 M4 Mac 上运行。</i></p>
+
+![通过 WineWrap 在 Mac 上运行的《荒野大镖客：救赎 2》](screenshots/RDR2.png)
+
+<p align="center"><i>《荒野大镖客：救赎 2》在 M4 Mac 上以 60 FPS 运行，DirectX 12 跑在 D3DMetal 上。</i></p>
 
 试了别的游戏？欢迎[提交 issue](https://github.com/hashspace-apps/wine-wrap/issues)
 告诉我们结果（中文、英文都可以）。

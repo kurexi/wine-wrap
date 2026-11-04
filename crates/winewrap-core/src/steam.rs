@@ -126,6 +126,52 @@ pub fn is_running(bottle: &Bottle) -> bool {
         })
 }
 
+/// Keep per-game settings in place for as long as Steam runs in the bottle.
+///
+/// WineWrap writes them before it starts anything, but a game installed or
+/// started from Steam's own window afterwards never passes through WineWrap,
+/// and it may crash on its first run before it saves any settings. So check
+/// every few seconds on a background thread, which ends once Steam has
+/// quit (or never came up). Only one watcher runs per bottle.
+pub fn watch_game_settings(bottle: &Bottle) {
+    use std::collections::HashSet;
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+
+    static WATCHED: Mutex<Option<HashSet<PathBuf>>> = Mutex::new(None);
+    let path = bottle.path.clone();
+    if !WATCHED
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get_or_insert_with(HashSet::new)
+        .insert(path.clone())
+    {
+        return;
+    }
+    std::thread::spawn(move || {
+        let started = Instant::now();
+        let mut seen = false;
+        loop {
+            std::thread::sleep(Duration::from_secs(3));
+            // Re-read the bottle: games and settings may have changed.
+            let Ok(bottle) = Bottle::load(&path) else {
+                break;
+            };
+            if is_running(&bottle) {
+                seen = true;
+            } else if seen || started.elapsed() > Duration::from_secs(120) {
+                break;
+            }
+            if let Err(e) = crate::game_settings::apply(&bottle) {
+                tracing::warn!("could not write game settings: {e}");
+            }
+        }
+        if let Some(set) = WATCHED.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+            set.remove(&path);
+        }
+    });
+}
+
 /// Quit Steam and wait until everything in the bottle has exited, so that
 /// the next start picks up changed settings. Whatever is still running after
 /// `timeout` (a game, a stuck launcher) is stopped with `wineserver --kill`.

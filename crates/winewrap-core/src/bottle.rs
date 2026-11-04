@@ -398,9 +398,6 @@ impl Bottle {
     }
 }
 
-/// Normalise a drive letter for [`BottleConfig::drives`] (`"D:"` → `"d"`).
-/// Only D: to Y: are allowed: Wine uses C: for the bottle and Z: for the Mac's
-/// whole file system.
 /// Give every user in the prefix a real Documents folder inside the bottle.
 ///
 /// When Wine finds `C:\users\<user>\Documents` missing, it links it to
@@ -426,6 +423,9 @@ pub(crate) fn keep_documents_in_prefix(prefix: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Normalise a drive letter for [`BottleConfig::drives`] (`"D:"` → `"d"`).
+/// Only D: to Y: are allowed: Wine uses C: for the bottle and Z: for the Mac's
+/// whole file system.
 pub fn drive_letter(s: &str) -> std::result::Result<String, String> {
     match s.trim_end_matches(':').to_ascii_lowercase().as_bytes() {
         [c @ b'd'..=b'y'] => Ok(char::from(*c).to_string()),

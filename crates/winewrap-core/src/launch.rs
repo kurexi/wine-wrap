@@ -146,13 +146,20 @@ impl LaunchSpec {
     }
 
     /// Fix up the bottle this runs in, if any, just before it starts. Wine
-    /// may have re-linked its Documents folder to the Mac's since last time.
+    /// may have re-linked its Documents folder to the Mac's since last time,
+    /// and newly installed games may need settings written for them.
     fn prepare_prefix(&self) {
         let Some(prefix) = self.env.get("WINEPREFIX") else {
             return;
         };
         if let Err(e) = crate::bottle::keep_documents_in_prefix(Path::new(prefix)) {
             tracing::warn!("could not keep Documents inside the bottle: {e}");
+        }
+        // Programs run outside a bottle's own directory have no bottle.toml.
+        if let Ok(bottle) = Bottle::load(prefix) {
+            if let Err(e) = crate::game_settings::apply(&bottle) {
+                tracing::warn!("could not write game settings: {e}");
+            }
         }
     }
 

@@ -23,6 +23,7 @@ pub mod config;
 pub mod d3dmetal;
 pub mod download;
 pub mod error;
+mod game_settings;
 pub mod launch;
 pub mod paths;
 pub mod runtime;
