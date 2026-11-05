@@ -105,6 +105,10 @@ impl WineWrapApp {
             .as_ref()
             .map(steam::installed_games)
             .unwrap_or_default();
+        // Steam may still be running from before WineWrap was opened.
+        if let Some(b) = bottle.as_ref().filter(|b| steam::is_running(b)) {
+            steam::watch_game_settings(b);
+        }
     }
 
     fn selected_bottle(&self) -> Option<&Bottle> {
@@ -247,6 +251,7 @@ impl WineWrapApp {
             }
             if let Some(rt) = self.with_runtime(bottle) {
                 self.spawn(command(bottle, &rt), &label);
+                steam::watch_game_settings(bottle);
             }
             return;
         }
@@ -262,6 +267,7 @@ impl WineWrapApp {
                     .for_each(|line| r.log(line));
                 let (child, log) =
                     command(&bottle, &rt).spawn_logged(&ww.paths.logs_dir(), &label)?;
+                steam::watch_game_settings(&bottle);
                 r.log(format!(
                     "Started {label} (pid {}), log: {}",
                     child.id(),
@@ -332,6 +338,7 @@ impl WineWrapApp {
                 let label = format!("{}-steam", bottle.name());
                 let (child, log) = steam::launch_command(&bottle, &rt)
                     .spawn_logged(&ww.paths.logs_dir(), &label)?;
+                steam::watch_game_settings(&bottle);
                 r.log(format!(
                     "Started {label} (pid {}), log: {}",
                     child.id(),
