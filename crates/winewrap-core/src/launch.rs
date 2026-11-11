@@ -262,16 +262,34 @@ pub fn wine_env(bottle: &Bottle, runtime: &WineRuntime) -> BTreeMap<String, Stri
         env.insert("ROSETTA_ADVERTISE_AVX".into(), "1".into());
     }
 
-    // User variables win, except that WINEDLLOVERRIDES is merged so a user
-    // override does not silently drop the graphics backend's overrides.
+    // Without these, a game with over 1 GiB of shaders compiles the rest
+    // again on every launch, and freed memory is never given back.
+    let mut inserted: Vec<String> = runtime
+        .macos_fixes()
+        .map(|lib| lib.to_string_lossy().into_owned())
+        .into_iter()
+        .collect();
+
+    // User variables win, except that WINEDLLOVERRIDES and
+    // DYLD_INSERT_LIBRARIES are merged so a user's value does not silently
+    // drop ours.
     for (k, v) in &cfg.env {
         if k == "WINEDLLOVERRIDES" {
             overrides.push(v.clone());
+        } else if k == "DYLD_INSERT_LIBRARIES" {
+            for lib in v.split(':').filter(|l| !l.is_empty()) {
+                if !inserted.iter().any(|l| l == lib) {
+                    inserted.push(lib.into());
+                }
+            }
         } else {
             env.insert(k.clone(), v.clone());
         }
     }
     env.insert("WINEDLLOVERRIDES".into(), overrides.join(";"));
+    if !inserted.is_empty() {
+        env.insert("DYLD_INSERT_LIBRARIES".into(), inserted.join(":"));
+    }
     env
 }
 
@@ -304,6 +322,33 @@ mod tests {
         );
         assert!(!env.contains_key("MTL_HUD_ENABLED"));
         assert!(!env.contains_key("WINEWRAP_D3DMETAL_DIR"));
+    }
+
+    #[test]
+    fn macos_fixes_are_inserted_when_shipped() {
+        let (mut bottle, rt, _d) = fixture(BottleConfig::new("Steam"), RuntimeKind::AppBundle);
+        assert!(!wine_env(&bottle, &rt).contains_key("DYLD_INSERT_LIBRARIES"));
+
+        let lib = rt.root.join("lib/libwinewrap_fixes.dylib");
+        std::fs::create_dir_all(lib.parent().unwrap()).unwrap();
+        std::fs::write(&lib, "").unwrap();
+        let shim = lib.to_string_lossy().into_owned();
+        assert_eq!(wine_env(&bottle, &rt)["DYLD_INSERT_LIBRARIES"], shim);
+
+        // A user's own libraries are kept, and naming the shim twice is harmless.
+        bottle
+            .config
+            .env
+            .insert("DYLD_INSERT_LIBRARIES".into(), "/opt/hook.dylib".into());
+        assert_eq!(
+            wine_env(&bottle, &rt)["DYLD_INSERT_LIBRARIES"],
+            format!("{shim}:/opt/hook.dylib")
+        );
+        bottle
+            .config
+            .env
+            .insert("DYLD_INSERT_LIBRARIES".into(), shim.clone());
+        assert_eq!(wine_env(&bottle, &rt)["DYLD_INSERT_LIBRARIES"], shim);
     }
 
     #[test]

@@ -144,6 +144,26 @@ pub fn remove(runtime_root: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Copy the D3DMetal that WineWrap grafted into the Wine build at `from` into
+/// the one at `to`, so a newer build keeps the D3DMetal the user added to the
+/// one it replaces. Returns whether anything was copied: nothing is when
+/// `from` has no graft or `to` already has D3DMetal.
+pub fn carry_over(from: &Path, to: &Path) -> Result<bool> {
+    let dirs = [
+        Path::new("lib/external"),
+        &Path::new("lib").join(D3DMETAL_DIR),
+    ];
+    let grafted = from.join(dirs[0]).join("D3DMetal.framework").is_dir()
+        && from.join(dirs[1]).join("x86_64-windows/dxgi.dll").is_file();
+    if !grafted || dirs.iter().any(|dir| to.join(dir).exists()) {
+        return Ok(false);
+    }
+    for dir in dirs {
+        copy_tree(&from.join(dir), &to.join(dir))?;
+    }
+    Ok(true)
+}
+
 /// Depth-limited search for an `external/` directory that holds
 /// `D3DMetal.framework`.
 fn find_external(dir: &Path, depth: usize) -> Option<PathBuf> {
@@ -204,6 +224,34 @@ mod tests {
         for name in ["d3d12", "dxgi", "d3d11"] {
             std::fs::write(windows.join(format!("{name}.dll")), b"pe").unwrap();
         }
+    }
+
+    #[test]
+    fn carry_over_copies_a_graft_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let (gptk, old, new) = (
+            dir.path().join("g"),
+            dir.path().join("a"),
+            dir.path().join("b"),
+        );
+        fake_gptk(&gptk);
+        for rt in [&old, &new] {
+            std::fs::create_dir_all(rt.join("lib")).unwrap();
+        }
+        assert!(!carry_over(&old, &new).unwrap());
+
+        D3DMetalSource::locate(&gptk)
+            .unwrap()
+            .graft_into(&old)
+            .unwrap();
+        assert!(carry_over(&old, &new).unwrap());
+        assert!(new
+            .join("lib/external/D3DMetal.framework/D3DMetal")
+            .exists());
+        assert!(new.join("lib/d3dmetal/x86_64-windows/dxgi.dll").is_file());
+        let link = new.join("lib/d3dmetal/x86_64-unix/dxgi.so");
+        assert!(link.is_symlink() && link.exists());
+        assert!(!carry_over(&old, &new).unwrap());
     }
 
     #[test]

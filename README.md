@@ -76,7 +76,7 @@ Tested on an M4 Mac.
 | Red Dead Redemption | ✅ Yes | 60 FPS. Needs D3DMetal. Starts through the Rockstar Games Launcher; Social Club sign-in and Xbox controller work. |
 | Red Dead Redemption 2 | ✅ Yes | 60 FPS. Needs D3DMetal. WineWrap sets it to DirectX 12, because its default Vulkan renderer crashes on start. Don't switch it back to Vulkan in the game's settings. It warns once that the AMD driver is out of date: click OK. For full screen, choose Fullscreen at 1280 × 800 in Settings → Graphics. |
 | Grand Theft Auto IV: The Complete Edition | ✅ Yes | Starts through the Rockstar Games Launcher. It keeps its settings and profiles in Documents, so if macOS asks whether WineWrap may use your Documents folder, allow it. |
-| Phantom Blade Zero | ❌ No | Its Denuvo DRM crashes before the game shows anything (it fails in CrossOver too). |
+| Phantom Blade Zero | ⚠️ Mostly | 60 FPS at medium settings. Needs D3DMetal. It uses 12–13 GB of memory, so on a 16 GB Mac close other apps first. The first start compiles shaders for about 15 minutes; later starts take about 4. About one start in two crashes just after the shader screen reaches 100%: start it again. |
 
 ![Grand Theft Auto IV running on a Mac through WineWrap](screenshots/GTA-IV.png)
 
@@ -284,7 +284,7 @@ to remove it again. From the command line:
    managed `wine-winewrap-*` build), pointing at the mounted volume:
 
    ```bash
-   winewrap runtime install-d3dmetal wine-winewrap-26.3.0-4 "/Volumes/Evaluation environment for Windows games 4.0 beta 3"
+   winewrap runtime install-d3dmetal wine-winewrap-26.3.0-5 "/Volumes/Evaluation environment for Windows games 4.0 beta 3"
    ```
 
    You can eject the images afterwards: everything D3DMetal needs is copied into
@@ -397,11 +397,11 @@ it first, because the app downloads it from its own release:
    the CrossOver source and patches:
 
 ```bash
-git tag wine-winewrap-26.3.0-4
+git tag wine-winewrap-26.3.0-5
 ```
 
 ```bash
-git push origin wine-winewrap-26.3.0-4
+git push origin wine-winewrap-26.3.0-5
 ```
 
 #### Code signing (optional)

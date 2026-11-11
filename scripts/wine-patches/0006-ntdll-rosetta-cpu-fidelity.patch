@@ -1,0 +1,577 @@
+ntdll: Make Rosetta's x86 CPU look more like a real one.
+
+Programs built for a Skylake/Zen class CPU, and the copy protection some games
+ship with (Phantom Blade Zero), never get to their first window under Rosetta:
+its CPU lacks features they check for, and a few of its answers differ from
+hardware. Under Rosetta only:
+
+- CPUID leaf 7 reports CLFLUSHOPT, CLWB and RDPID. Rosetta answers CPUID from
+  tables in its runtime image (libRosettaRuntime), mapped read-only into every
+  translated process; the bits are set in this process's private copy.
+  Rosetta runs CLFLUSHOPT itself; CLWB and RDPID raise an invalid opcode and
+  are emulated. WINEWRAP_ROSETTA_CPUID7=0 turns this off.
+- An access through a non-canonical address is reported as Windows reports
+  the general protection fault: an access violation reading address -1.
+  Rosetta delivers a page fault at the address itself.
+- Execution breakpoints set through a thread context (Dr0-Dr3, Dr7) raise
+  their debug exception. Rosetta has no debug registers, so the breakpoint's
+  page loses execute permission and a thread entering it is single-stepped
+  to the breakpoint. The program's code is not modified.
+- A thread reading its own debug registers gets back what it set, with Dr7's
+  always-one bit 10, instead of the zeroes the server answers.
+
+The approach (which CPU answers matter, and that Rosetta's CPUID tables can be
+changed per process) follows the ntdll-rosetta-cpu-fidelity work credited to
+Hrava in MathiasKowoll/MacGameFix; this is an independent implementation.
+
+Applies on top of 0004, to the Wine tree in CodeWeavers' crossover-sources
+(26.3.0).
+
+--- a/dlls/ntdll/unix/signal_x86_64.c
++++ b/dlls/ntdll/unix/signal_x86_64.c
+@@ -85,6 +85,16 @@
+ #include <sys/sysctl.h>
+ static BOOL is_rosetta2;
+ 
++/* WineWrap: an x86 CPU closer to a real one under Rosetta (see rosetta_add_cpu_features) */
++#include <libproc.h>
++#include <mach/mach.h>
++#include <mach/mach_vm.h>
++#define ROSETTA_CPUID7_EBX  0x01800000  /* CLFLUSHOPT, CLWB */
++#define ROSETTA_CPUID7_ECX  0x00400000  /* RDPID */
++static BOOL rosetta_cpu_features;       /* CPUID leaf 7 reports the bits above */
++static BOOL rosetta_bp_active;          /* an execution breakpoint is armed or being stepped to */
++static void rosetta_update_exec_breakpoints( ULONG_PTR resume_rip );
++
+ /* CW Hack 23427 */
+ static BOOL sequoia_or_later = FALSE;
+ #endif
+@@ -994,6 +1004,11 @@
+     context->Dr3    = amd64_thread_data()->dr3;
+     context->Dr6    = amd64_thread_data()->dr6;
+     context->Dr7    = amd64_thread_data()->dr7;
++#ifdef __APPLE__
++    /* WineWrap: Rosetta has no debug registers, so the values come from the thread data
++     * alone. With a breakpoint enabled, Dr7 reads back with its always-one bit 10. */
++    if (is_rosetta2 && (context->Dr7 & 0xff)) context->Dr7 |= 0x400;
++#endif
+     if (FPU_sig(sigcontext))
+     {
+         XSAVE_AREA_HEADER *xs;
+@@ -1165,6 +1180,12 @@
+         }
+     }
+ 
++#ifdef __APPLE__
++    /* WineWrap: arm or disarm the stand-ins for this thread's execution breakpoints */
++    if (flags & CONTEXT_DEBUG_REGISTERS)
++        rosetta_update_exec_breakpoints( (flags & CONTEXT_CONTROL) ? context->Rip : 0 );
++#endif
++
+     if (flags & CONTEXT_INTEGER)
+     {
+         frame->rax = context->Rax;
+@@ -1222,6 +1243,11 @@
+     BOOL self = (handle == GetCurrentThread());
+ 
+     /* debug registers require a server call */
++#ifdef __APPLE__
++    /* WineWrap: not under Rosetta, where the server answers zeroes and the thread
++     * data is all there is (see below) */
++    if (!is_rosetta2 || !self)
++#endif
+     if (needed_flags & CONTEXT_DEBUG_REGISTERS) self = FALSE;
+ 
+     if (!self)
+@@ -1334,6 +1360,21 @@
+             frame->restore_flags |= CONTEXT_XSTATE;
+         }
+     }
++#ifdef __APPLE__
++    if (is_rosetta2 && (needed_flags & CONTEXT_DEBUG_REGISTERS))
++    {
++        /* WineWrap: the registers the thread last set, as hardware would read them back */
++        context->Dr0 = amd64_thread_data()->dr0;
++        context->Dr1 = amd64_thread_data()->dr1;
++        context->Dr2 = amd64_thread_data()->dr2;
++        context->Dr3 = amd64_thread_data()->dr3;
++        context->Dr6 = amd64_thread_data()->dr6;
++        context->Dr7 = amd64_thread_data()->dr7;
++        if (context->Dr7 & 0xff) context->Dr7 |= 0x400;
++        context->ContextFlags |= CONTEXT_DEBUG_REGISTERS;
++    }
++    else
++#endif
+     /* update the cached version of the debug registers */
+     if (needed_flags & CONTEXT_DEBUG_REGISTERS)
+     {
+@@ -1591,6 +1632,11 @@
+          * single step interrupt. try to avoid as much overhead as possible
+          * and only do a server call if there is any hw bp enabled. */
+ 
++#ifdef __APPLE__
++        /* WineWrap: under Rosetta the server has no debug registers to fetch; the
++         * context already holds the ones kept in the thread data */
++        if (!is_rosetta2)
++#endif
+         if (!(context->EFlags & 0x100) || (context->Dr7 & 0xff))
+         {
+             /* (possible) hardware breakpoint, fetch the debug registers */
+@@ -2032,6 +2078,83 @@
+     TRACE_(seh)( "emulated an XGETBV instruction\n" );
+     return TRUE;
+ }
++
++/***********************************************************************
++ *           emulate_rosetta_missing_instr
++ *
++ * WineWrap: Rosetta raises an invalid opcode for CLWB and RDPID. Once CPUID says the
++ * CPU has them (see rosetta_add_cpu_features), run them here:
++ *   CLWB m8      66 0F AE /6   writes a cache line back, which changes nothing a
++ *                              program can see, so it is skipped
++ *   RDPID r64    F3 0F C7 /7   reads the processor number Windows keeps in TSC_AUX
++ */
++static BOOL emulate_rosetta_missing_instr( ucontext_t *sigcontext )
++{
++    BYTE instr[15], prefix = 0, rex = 0, modrm;
++    unsigned int len, pos = 0;
++
++    if (!rosetta_cpu_features) return FALSE;
++    len = virtual_uninterrupted_read_memory( (BYTE *)RIP_sig(sigcontext), instr, sizeof(instr) );
++
++    for ( ; pos < len; pos++)  /* legacy prefixes */
++    {
++        if (instr[pos] == 0x66 || instr[pos] == 0xf3) prefix = instr[pos];
++        else if (instr[pos] != 0x26 && instr[pos] != 0x2e && instr[pos] != 0x36 && instr[pos] != 0x3e &&
++                 instr[pos] != 0x64 && instr[pos] != 0x65 && instr[pos] != 0x67) break;
++    }
++    if (pos < len && (instr[pos] & 0xf0) == 0x40) rex = instr[pos++];
++    if (pos + 3 > len || instr[pos] != 0x0f) return FALSE;
++    modrm = instr[pos + 2];
++
++    if (prefix == 0xf3 && instr[pos + 1] == 0xc7 && (modrm & 0xf8) == 0xf8)
++    {
++        ULONG_PTR value = NtGetCurrentProcessorNumber();
++
++        switch ((modrm & 7) | ((rex & 1) << 3))
++        {
++        case 0:  RAX_sig(sigcontext) = value; break;
++        case 1:  RCX_sig(sigcontext) = value; break;
++        case 2:  RDX_sig(sigcontext) = value; break;
++        case 3:  RBX_sig(sigcontext) = value; break;
++        case 4:  RSP_sig(sigcontext) = value; break;
++        case 5:  RBP_sig(sigcontext) = value; break;
++        case 6:  RSI_sig(sigcontext) = value; break;
++        case 7:  RDI_sig(sigcontext) = value; break;
++        case 8:  R8_sig(sigcontext)  = value; break;
++        case 9:  R9_sig(sigcontext)  = value; break;
++        case 10: R10_sig(sigcontext) = value; break;
++        case 11: R11_sig(sigcontext) = value; break;
++        case 12: R12_sig(sigcontext) = value; break;
++        case 13: R13_sig(sigcontext) = value; break;
++        case 14: R14_sig(sigcontext) = value; break;
++        case 15: R15_sig(sigcontext) = value; break;
++        }
++        RIP_sig(sigcontext) += pos + 3;
++        TRACE_(seh)( "emulated an RDPID instruction\n" );
++        return TRUE;
++    }
++
++    if (prefix == 0x66 && instr[pos + 1] == 0xae && (modrm >> 6) != 3 && ((modrm >> 3) & 7) == 6)
++    {
++        unsigned int mod = modrm >> 6, rm = modrm & 7;
++
++        pos += 3;
++        if (rm == 4)  /* SIB byte */
++        {
++            if (pos >= len) return FALSE;
++            if (mod == 0 && (instr[pos] & 7) == 5) pos += 4;  /* no base: disp32 */
++            pos++;
++        }
++        else if (mod == 0 && rm == 5) pos += 4;  /* rip-relative: disp32 */
++        if (mod == 1) pos += 1;
++        else if (mod == 2) pos += 4;
++        if (pos > len) return FALSE;
++        RIP_sig(sigcontext) += pos;
++        TRACE_(seh)( "emulated a CLWB instruction\n" );
++        return TRUE;
++    }
++    return FALSE;
++}
+ #endif
+ 
+ /***********************************************************************
+@@ -2486,8 +2609,236 @@
+ #elif defined(__APPLE__)
+     /* leave_handler() will set GSBASE to the TEB */
+ #endif
++    return TRUE;
++}
++
++
++#ifdef __APPLE__
++/***********************************************************************
++ * WineWrap: execution breakpoints under Rosetta.
++ *
++ * Rosetta gives a thread no debug registers, so Wine only remembers Dr0-Dr7. A program
++ * that arms an execution breakpoint through its thread context (copy protection steers
++ * its control flow this way) waits for a debug exception that never comes.
++ *
++ * Stand-in that leaves the program's code as it is: the page of an armed breakpoint
++ * loses execute permission. A thread that enters the page faults, and is then
++ * single-stepped with the trap flag until it reaches its breakpoint, where the debug
++ * exception is raised, or leaves the page, which is protected again.
++ */
++struct rosetta_bp
++{
++    ULONG_PTR addr;     /* 0: free slot */
++    HANDLE    tid;      /* the thread whose debug registers hold it */
++    int       prot;     /* unix protection of its page */
++    BOOL      guarded;  /* execute permission is currently taken away */
++};
++static struct rosetta_bp rosetta_bps[16];
++static HANDLE rosetta_bp_steppers[16];  /* threads stepping through a breakpoint's page */
++static pthread_mutex_t rosetta_bp_mutex = PTHREAD_MUTEX_INITIALIZER;
++
++static inline BOOL rosetta_bp_same_page( ULONG_PTR a, ULONG_PTR b )
++{
++    return !((a ^ b) & ~(ULONG_PTR)0xfff);
++}
++
++static void rosetta_bp_guard( struct rosetta_bp *bp, BOOL guard )
++{
++    if (!bp->addr || bp->guarded == guard) return;
++    bp->guarded = guard;
++    mprotect( (void *)(bp->addr & ~(ULONG_PTR)0xfff), 0x1000, guard ? bp->prot & ~PROT_EXEC : bp->prot );
++}
++
++static void rosetta_bp_guard_all(void)
++{
++    unsigned int i;
++    for (i = 0; i < ARRAY_SIZE(rosetta_bps); i++) rosetta_bp_guard( &rosetta_bps[i], TRUE );
++}
++
++/* returns whether the thread was (step FALSE) or now is (step TRUE) stepping */
++static BOOL rosetta_bp_set_stepping( HANDLE tid, BOOL step )
++{
++    unsigned int i;
++
++    for (i = 0; i < ARRAY_SIZE(rosetta_bp_steppers); i++)
++    {
++        if (rosetta_bp_steppers[i] != tid) continue;
++        if (!step) rosetta_bp_steppers[i] = 0;
++        return TRUE;
++    }
++    if (!step) return FALSE;
++    for (i = 0; i < ARRAY_SIZE(rosetta_bp_steppers); i++)
++        if (!InterlockedCompareExchangePointer( (void **)&rosetta_bp_steppers[i], tid, 0 )) return TRUE;
++    return FALSE;
++}
++
++/* the debug register of the current thread with an enabled execution breakpoint at addr, or -1 */
++static int rosetta_exec_bp_at( ULONG_PTR addr )
++{
++    struct amd64_thread_data *data = amd64_thread_data();
++    DWORD_PTR dr[4] = { data->dr0, data->dr1, data->dr2, data->dr3 };
++    int i;
++
++    for (i = 0; i < 4; i++)
++    {
++        if (dr[i] != addr || !addr) continue;
++        if (!(data->dr7 & (3 << (i * 2)))) continue;   /* neither enable bit */
++        if ((data->dr7 >> (16 + i * 4)) & 3) continue;  /* a data breakpoint */
++        return i;
++    }
++    return -1;
++}
++
++/* make the protected pages match the current thread's debug registers. A breakpoint
++ * at the address the thread resumes from is left out: that instruction is the one
++ * that has to run next, as with the resume flag. */
++static void rosetta_update_exec_breakpoints( ULONG_PTR resume_rip )
++{
++    struct amd64_thread_data *data = amd64_thread_data();
++    DWORD_PTR dr[4] = { data->dr0, data->dr1, data->dr2, data->dr3 };
++    HANDLE tid = NtCurrentTeb()->ClientId.UniqueThread;
++    BOOL active = FALSE;
++    unsigned int i, j;
++
++    if (!is_rosetta2 || (!rosetta_bp_active && !(data->dr7 & 0xff))) return;
++
++    pthread_mutex_lock( &rosetta_bp_mutex );
++    for (j = 0; j < ARRAY_SIZE(rosetta_bps); j++)
++    {
++        if (!rosetta_bps[j].addr || rosetta_bps[j].tid != tid) continue;
++        rosetta_bp_guard( &rosetta_bps[j], FALSE );
++        rosetta_bps[j].addr = 0;
++    }
++    for (i = 0; i < 4; i++)
++    {
++        MEMORY_BASIC_INFORMATION info;
++
++        if (dr[i] == resume_rip || rosetta_exec_bp_at( dr[i] ) != i) continue;
++        if (NtQueryVirtualMemory( NtCurrentProcess(), (void *)dr[i], MemoryBasicInformation,
++                                  &info, sizeof(info), NULL ) || info.State != MEM_COMMIT) continue;
++        for (j = 0; j < ARRAY_SIZE(rosetta_bps); j++)
++        {
++            if (rosetta_bps[j].addr) continue;
++            rosetta_bps[j].tid = tid;
++            rosetta_bps[j].prot = PROT_READ | PROT_EXEC;
++            if (info.Protect & (PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY))
++                rosetta_bps[j].prot |= PROT_WRITE;
++            rosetta_bps[j].guarded = FALSE;
++            rosetta_bps[j].addr = dr[i];
++            TRACE_(seh)( "armed execution breakpoint %u at %p\n", i, (void *)dr[i] );
++            break;
++        }
++    }
++    /* pages are protected again here too, after a breakpoint in one of them was hit */
++    for (j = 0; j < ARRAY_SIZE(rosetta_bps); j++)
++    {
++        if (!rosetta_bps[j].addr) continue;
++        rosetta_bp_guard( &rosetta_bps[j], TRUE );
++        active = TRUE;
++    }
++    rosetta_bp_active = active;
++    pthread_mutex_unlock( &rosetta_bp_mutex );
++}
++
++/* raise the debug exception of the current thread's breakpoint in debug register reg */
++static void rosetta_bp_raise( int reg, ucontext_t *ucontext, EXCEPTION_RECORD *rec, struct xcontext *xcontext )
++{
++    ULONG_PTR rip = RIP_sig(ucontext);
++    unsigned int j;
++
++    /* the instruction has to run when the handler resumes it, so its page is opened;
++     * the next context the thread sets protects it again */
++    for (j = 0; j < ARRAY_SIZE(rosetta_bps); j++)
++    {
++        if (!rosetta_bps[j].addr || !rosetta_bp_same_page( rosetta_bps[j].addr, rip )) continue;
++        rosetta_bp_guard( &rosetta_bps[j], FALSE );
++    }
++    TRACE_(seh)( "execution breakpoint %d hit at %p\n", reg, (void *)rip );
++    /* Dr6 as hardware reads it: the reserved bits, and the breakpoint that was hit */
++    amd64_thread_data()->dr6 = 0xffff0ff0 | ((DWORD_PTR)1 << reg);
++    EFL_sig(ucontext) &= ~0x100;
++    xcontext->c.EFlags &= ~0x100;
++    xcontext->c.Dr6 = amd64_thread_data()->dr6;
++    rec->ExceptionCode = EXCEPTION_SINGLE_STEP;
++    rec->ExceptionAddress = (void *)rip;
++    rec->NumberParameters = 0;
++    setup_raise_exception( ucontext, rec, xcontext );
++}
++
++/* a fault: is the thread at one of its breakpoints, or entering a protected page? */
++static BOOL rosetta_bp_fault( ucontext_t *ucontext, EXCEPTION_RECORD *rec, struct xcontext *xcontext )
++{
++    HANDLE tid = NtCurrentTeb()->ClientId.UniqueThread;
++    ULONG_PTR rip = RIP_sig(ucontext);
++    BOOL entered = FALSE, stepping = FALSE;
++    unsigned int j;
++    int reg;
++
++    if (!is_rosetta2 || (!rosetta_bp_active && !(amd64_thread_data()->dr7 & 0xff))) return FALSE;
++
++    for (j = 0; j < ARRAY_SIZE(rosetta_bp_steppers); j++) if (rosetta_bp_steppers[j] == tid) stepping = TRUE;
++
++    /* on hardware the breakpoint comes before whatever the instruction itself does */
++    if (!stepping && (reg = rosetta_exec_bp_at( rip )) >= 0)
++    {
++        rosetta_bp_raise( reg, ucontext, rec, xcontext );
++        return TRUE;
++    }
++    for (j = 0; j < ARRAY_SIZE(rosetta_bps); j++)
++    {
++        if (!rosetta_bps[j].addr || !rosetta_bps[j].guarded) continue;
++        if (!rosetta_bp_same_page( rosetta_bps[j].addr, rip )) continue;
++        rosetta_bp_guard( &rosetta_bps[j], FALSE );
++        entered = TRUE;
++    }
++    if (entered)
++    {
++        if (rosetta_bp_set_stepping( tid, TRUE )) EFL_sig(ucontext) |= 0x100;
++        leave_handler( ucontext );
++        return TRUE;
++    }
++    if (stepping)
++    {
++        /* a fault of the program's own while it was being stepped: stop stepping */
++        rosetta_bp_set_stepping( tid, FALSE );
++        EFL_sig(ucontext) &= ~0x100;
++        xcontext->c.EFlags &= ~0x100;
++        rosetta_bp_guard_all();
++    }
++    return FALSE;
++}
++
++/* a single-step trap of a thread that is being stepped through a breakpoint's page */
++static BOOL rosetta_bp_step( ucontext_t *ucontext, EXCEPTION_RECORD *rec, struct xcontext *xcontext )
++{
++    HANDLE tid = NtCurrentTeb()->ClientId.UniqueThread;
++    ULONG_PTR rip = RIP_sig(ucontext);
++    unsigned int i, j;
++    int reg;
++
++    if (!is_rosetta2 || !rosetta_bp_active) return FALSE;
++    for (i = 0; i < ARRAY_SIZE(rosetta_bp_steppers); i++) if (rosetta_bp_steppers[i] == tid) break;
++    if (i == ARRAY_SIZE(rosetta_bp_steppers)) return FALSE;
++
++    if ((reg = rosetta_exec_bp_at( rip )) >= 0)
++    {
++        rosetta_bp_set_stepping( tid, FALSE );
++        rosetta_bp_raise( reg, ucontext, rec, xcontext );
++        return TRUE;
++    }
++    for (j = 0; j < ARRAY_SIZE(rosetta_bps); j++)
++        if (rosetta_bps[j].addr && rosetta_bp_same_page( rosetta_bps[j].addr, rip )) break;
++    if (j < ARRAY_SIZE(rosetta_bps)) EFL_sig(ucontext) |= 0x100;  /* still inside: next instruction */
++    else
++    {
++        rosetta_bp_set_stepping( tid, FALSE );
++        EFL_sig(ucontext) &= ~0x100;
++        rosetta_bp_guard_all();
++    }
++    leave_handler( ucontext );
+     return TRUE;
+ }
++#endif  /* __APPLE__ */
+ 
+ 
+ /**********************************************************************
+@@ -2504,6 +2855,10 @@
+     rec.ExceptionAddress = (void *)RIP_sig(ucontext);
+     save_context( &context, ucontext );
+ 
++#ifdef __APPLE__
++    if (rosetta_bp_fault( ucontext, &rec, &context )) return;
++#endif
++
+     switch(TRAP_sig(ucontext))
+     {
+     case TRAP_x86_OFLOW:   /* Overflow exception */
+@@ -2518,6 +2873,8 @@
+         if (handle_cet_nop( ucontext, &context.c )) return;
+         /* CW HACK 23427 */
+         if (emulate_xgetbv( ucontext, &context.c )) return;
++        /* WineWrap */
++        if (emulate_rosetta_missing_instr( ucontext )) return;
+ #endif
+         rec.ExceptionCode = EXCEPTION_ILLEGAL_INSTRUCTION;
+         break;
+@@ -2539,6 +2896,20 @@
+         }
+         break;
+     case TRAP_x86_PAGEFLT:  /* Page fault */
++#ifdef __APPLE__
++        /* WineWrap: an access through a non-canonical address is a general protection
++         * fault on an x86 CPU, which Windows reports as an access violation reading
++         * address -1. Rosetta reports a page fault at the address itself. */
++        if (is_rosetta2 && (ULONG_PTR)siginfo->si_addr + ((ULONG_PTR)1 << 47) >= ((ULONG_PTR)1 << 48))
++        {
++            TRACE_(seh)( "non-canonical address %p at %p\n", siginfo->si_addr, (void *)RIP_sig(ucontext) );
++            rec.ExceptionCode = EXCEPTION_ACCESS_VIOLATION;
++            rec.NumberParameters = 2;
++            rec.ExceptionInformation[0] = 0;
++            rec.ExceptionInformation[1] = ~(ULONG_PTR)0;
++            break;
++        }
++#endif
+         rec.NumberParameters = 2;
+         rec.ExceptionInformation[0] = (ERROR_sig(ucontext) >> 1) & 0x09;
+         rec.ExceptionInformation[1] = (ULONG_PTR)siginfo->si_addr;
+@@ -2602,6 +2973,10 @@
+     rec.ExceptionAddress = (void *)RIP_sig(ucontext);
+     save_context( &context, ucontext );
+ 
++#ifdef __APPLE__
++    if (TRAP_sig(ucontext) != TRAP_x86_BPTFLT && rosetta_bp_step( ucontext, &rec, &context )) return;
++#endif
++
+     switch (TRAP_sig(ucontext))
+     {
+     case TRAP_x86_TRCTRAP:
+@@ -2961,6 +3336,76 @@
+ 
+     if (kr == KERN_SUCCESS) return (void*)tiinfo.thread_handle;
+     return NULL;
++}
++#endif
++
++
++#ifdef __APPLE__
++/***********************************************************************
++ *           rosetta_add_cpu_features
++ *
++ * WineWrap: Rosetta's CPUID describes a CPU from about 2013, and leaf 7 (the newer
++ * feature flags) lacks CLFLUSHOPT, CLWB and RDPID. Programs built for a Skylake or
++ * Zen class CPU check for them, and copy protection built at that level never gets
++ * to the game without them.
++ *
++ * All three can be honoured: Rosetta runs CLFLUSHOPT, and CLWB and RDPID are run by
++ * emulate_rosetta_missing_instr. Rosetta answers CPUID from tables of {eax, ebx, ecx,
++ * edx} rows, one row per leaf, in the read-only image of its runtime that is mapped
++ * into every translated process. Set the three bits in this process's private copy
++ * of the leaf 7 rows. WINEWRAP_ROSETTA_CPUID7=0 leaves the CPU as Rosetta reports it.
++ */
++static void rosetta_add_cpu_features(void)
++{
++    const char *env = getenv( "WINEWRAP_ROSETTA_CPUID7" );
++    mach_vm_address_t addr = 0;
++    mach_vm_size_t size = 0;
++    unsigned int found = 0;
++
++    if (!is_rosetta2 || (env && !strcmp( env, "0" ))) return;
++    for (;; addr += size)
++    {
++        vm_region_basic_info_data_64_t info;
++        mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
++        mach_port_t object;
++        char path[1024];
++        unsigned int *p;
++        size_t i, n;
++
++        if (mach_vm_region( mach_task_self(), &addr, &size, VM_REGION_BASIC_INFO_64,
++                            (vm_region_info_t)&info, &count, &object )) break;
++        if ((info.protection & (VM_PROT_READ | VM_PROT_WRITE | VM_PROT_EXECUTE)) != (VM_PROT_READ | VM_PROT_EXECUTE))
++            continue;
++        if (proc_regionfilename( getpid(), addr, path, sizeof(path) ) <= 0) continue;
++        if (!strstr( path, "libRosettaRuntime" )) continue;
++
++        p = (unsigned int *)addr;
++        n = size / sizeof(*p);
++        for (i = 1; i + 8 * 4 <= n; i++)
++        {
++            unsigned int *leaf0 = p + i - 1, *leaf1 = leaf0 + 4, *leaf7 = leaf0 + 7 * 4;
++            mach_vm_address_t page;
++            mach_vm_size_t len;
++
++            /* leaf 0: the highest leaf, then "GenuineIntel" in ebx, edx, ecx */
++            if (leaf0[1] != 0x756e6547 || leaf0[2] != 0x6c65746e || leaf0[3] != 0x49656e69) continue;
++            if (leaf0[0] < 7 || leaf0[0] > 0xff) continue;
++            if (!(leaf1[3] & (1 << 25))) continue;  /* leaf 1 has SSE in edx */
++            /* leaf 7 as Rosetta has it: at most BMI1, AVX2 and BMI2 */
++            if (leaf7[0] || (leaf7[1] & ~0x128u) || leaf7[2] || leaf7[3]) continue;
++
++            page = (mach_vm_address_t)leaf7 & ~(mach_vm_address_t)0xfff;
++            len = (((mach_vm_address_t)(leaf7 + 4) + 0xfff) & ~(mach_vm_address_t)0xfff) - page;
++            if (mach_vm_protect( mach_task_self(), page, len, 0, VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY ))
++                continue;
++            leaf7[1] |= ROSETTA_CPUID7_EBX;
++            leaf7[2] |= ROSETTA_CPUID7_ECX;
++            mach_vm_protect( mach_task_self(), page, len, 0, VM_PROT_READ | VM_PROT_EXECUTE );
++            found++;
++        }
++    }
++    if (found) rosetta_cpu_features = TRUE;
++    else WARN_(seh)( "Rosetta's CPUID tables were not found, leaf 7 stays as it is\n" );
+ }
+ #endif
+ 
+@@ -3010,6 +3455,7 @@
+         else
+             is_rosetta2 = ret;
+     }
++    rosetta_add_cpu_features();  /* WineWrap */
+ 
+     /* CW Hack 23427: __builtin_available presumably isn't signal-safe. */
+     if (__builtin_available( macOS 15.0, * ))

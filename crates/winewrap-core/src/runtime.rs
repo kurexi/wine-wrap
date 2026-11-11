@@ -105,6 +105,14 @@ impl WineRuntime {
         dir.join("x86_64-windows/dxgi.dll").is_file().then_some(dir)
     }
 
+    /// WineWrap's library of macOS fixes (a larger Metal shader cache, freed
+    /// memory returned under Rosetta), in builds that ship it; see
+    /// `scripts/wine-shims/macos-fixes.c`.
+    pub fn macos_fixes(&self) -> Option<PathBuf> {
+        let lib = self.root.join("lib/libwinewrap_fixes.dylib");
+        lib.is_file().then_some(lib)
+    }
+
     /// Ask the runtime for its version (`wine --version`).
     pub fn version(&self) -> Option<String> {
         let out = Command::new(self.wine()).arg("--version").output().ok()?;
