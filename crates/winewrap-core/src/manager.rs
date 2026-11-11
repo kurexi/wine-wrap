@@ -186,6 +186,11 @@ impl WineWrap {
         if self.runtime(&name).is_err() {
             wine_builds::install(&self.paths, &build, progress)?;
         }
+        // Keep the D3DMetal the user added to the build this one replaces.
+        let previous = config.runtime.as_deref().and_then(|n| self.runtime(n).ok());
+        if let (Some(previous), Ok(new)) = (previous, self.runtime(&name)) {
+            crate::d3dmetal::carry_over(&previous.root, &new.root)?;
+        }
         config.runtime = Some(name);
         Ok(true)
     }

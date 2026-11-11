@@ -1,6 +1,6 @@
 name: Wine build
 
-# Push a tag like `wine-winewrap-26.3.0-4` (matching VERSION in
+# Push a tag like `wine-winewrap-26.3.0-5` (matching VERSION in
 # scripts/build-wine-macos.sh) to build WineWrap's Wine on a macOS runner and
 # publish it as a GitHub release, with the source it was built from (LGPL).
 # The app downloads the build from that release (see wine_builds.rs), so
@@ -63,7 +63,7 @@ jobs:
           mkdir dist
           mv "$w/wine-winewrap-$VERSION-osx64.tar.xz" dist/
           mv "$w/downloads/crossover-sources-$CX.tar.gz" dist/
-          cp scripts/wine-patches/*.patch dist/
+          cp scripts/wine-patches/*.patch scripts/wine-shims/macos-fixes.c dist/
           (cd dist && shasum -a 256 * > SHA256SUMS)
           cat dist/SHA256SUMS
 

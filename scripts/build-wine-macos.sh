@@ -17,7 +17,7 @@ JOBS="$(sysctl -n hw.ncpu)"
 CX_VERSION=26.3.0
 # WineWrap's build of it. Bump the revision whenever the build changes, so
 # Steam bottles move to the new one (see wine_builds.rs).
-VERSION="$CX_VERSION-4"
+VERSION="$CX_VERSION-5"
 GCC_VERSION=15.2.0
 DOWNLOADS=(
   "https://media.codeweavers.com/pub/crossover/source/crossover-sources-$CX_VERSION.tar.gz ac99c8ca4b3848f3e81784135f023df266b61c2345726ea55a50b3e030dd6872"
@@ -204,6 +204,14 @@ for l in libgmp.10.dylib libnettle.8.dylib libhogweed.6.dylib libgnutls.30.dylib
   done
 done
 cp "$MVK/libMoltenVK.dylib" "$P/lib/"
+
+# Fixes for macOS behaviour, loaded into every Wine process (see the source).
+# Also built for arm64, so that native programs started from Wine can load it.
+/usr/bin/clang -arch x86_64 -arch arm64 -O2 -dynamiclib \
+  -install_name "@rpath/libwinewrap_fixes.dylib" \
+  -o "$P/lib/libwinewrap_fixes.dylib" "$ROOT/scripts/wine-shims/macos-fixes.c" \
+  -framework Metal -lobjc \
+  "$(xcrun --show-sdk-path)/System/Library/Frameworks/OpenGL.framework/Versions/A/Libraries/libCoreFSCache.tbd"
 
 mkdir -p "$P/share/wine/mono" "$P/share/wine/gecko"
 tar xJf "$DL/wine-mono-10.4.1-x86.tar.xz" -C "$P/share/wine/mono"
