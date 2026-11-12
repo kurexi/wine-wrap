@@ -12,12 +12,15 @@ It's Wine 11.0 from CodeWeavers' LGPL CrossOver 26.3.0 source, with WineWrap's p
 - **Shaders are compiled once:** macOS keeps at most 1 GiB of compiled Metal shaders per game, so games with more recompile them on every start. The build raises the limit to 16 GiB (`WINEWRAP_SHADER_CACHE_MB` changes it).
 - **No Mono prompt:** Wine Mono 10.4.1 and Wine Gecko 2.47.4 are bundled.
 
-New since 26.3.0-4: patch 0006 (Rosetta CPU fidelity) and `lib/libwinewrap_fixes.dylib` (the shader cache limit), built from `scripts/wine-shims/macos-fixes.c`.
+New since 26.3.0-5:
+
+- **Game videos play:** GStreamer 1.28.9 is bundled, so games can decode H.264, AAC and MP3 through Media Foundation, using macOS's VideoToolbox and AudioToolbox. Patch 0007 makes the video decoder output NV12 to system memory on macOS, which Unreal Engine's video player needs. Before this, Phantom Blade Zero stopped taking input after a cutscene.
+- **Controllers come back after reconnecting:** patch 0008. A game that re-checked controllers when one reconnected could miss it and ignore it until restarted (Phantom Blade Zero).
 
 ## Files
 
-- `wine-winewrap-26.3.0-5-osx64.tar.xz`: the build, `Wine WineWrap.app/Contents/Resources/wine`.
-- `crossover-sources-26.3.0.tar.gz` the `000*.patch` files and `macos-fixes.c`: the corresponding source, under the LGPL. Rebuild with `scripts/build-wine-macos.sh` from this tag.
+- `wine-winewrap-26.3.0-6-osx64.tar.xz`: the build, `Wine WineWrap.app/Contents/Resources/wine`.
+- `crossover-sources-26.3.0.tar.gz` the `000*.patch` files and `macos-fixes.c`: the corresponding source, under the LGPL. `gstreamer-1.28.9.tar.gz`, `glib-*`, `libffi-*`, `pcre2-*` and `proxy-libintl-*`: the source of the bundled GStreamer and its libraries. Rebuild with `scripts/build-wine-macos.sh` from this tag.
 - `SHA256SUMS`
 
 WineWrap is not affiliated with CodeWeavers, and this is not CrossOver.
