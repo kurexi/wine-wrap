@@ -29,7 +29,7 @@ const RELEASES_API: &str =
 /// WineWrap's own build, made by `scripts/build-wine-macos.sh` and published
 /// as a release of this repository (with its source, as the LGPL requires).
 const WINEWRAP_BUILD_VERSION: &str = "26.3.0-6";
-const WINEWRAP_BUILD_SIZE: u64 = 217_416_008;
+const WINEWRAP_BUILD_SIZE: u64 = 216_947_516;
 const WINEWRAP_RELEASES: &str = "https://github.com/kurexi/wine-wrap/releases/download";
 
 /// Which Wine release line to install.
