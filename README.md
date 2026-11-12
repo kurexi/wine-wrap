@@ -86,6 +86,10 @@ Tested on an M4 Mac.
 
 <p align="center"><i>Red Dead Redemption 2 on an M4 Mac at 60 FPS, with DirectX 12 on D3DMetal.</i></p>
 
+![Phantom Blade Zero running on a Mac through WineWrap](screenshots/PBZ.png)
+
+<p align="center"><i>Phantom Blade Zero on an M4 Mac at 60 FPS, with DirectX 12 on D3DMetal.</i></p>
+
 Tried another game? Open an issue and tell us how it went.
 
 ## DirectX 12 games

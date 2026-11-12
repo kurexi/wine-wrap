@@ -85,6 +85,10 @@ WineWrap 底层使用 [Wine](https://www.winehq.org/)（CrossOver 里用的也�
 
 <p align="center"><i>《荒野大镖客：救赎 2》在 M4 Mac 上以 60 FPS 运行，DirectX 12 跑在 D3DMetal 上。</i></p>
 
+![通过 WineWrap 在 Mac 上运行的《影之刃零》](screenshots/PBZ.png)
+
+<p align="center"><i>《影之刃零》在 M4 Mac 上以 60 FPS 运行，DirectX 12 跑在 D3DMetal 上。</i></p>
+
 试了别的游戏？欢迎[提交 issue](https://github.com/hashspace-apps/wine-wrap/issues)
 告诉我们结果（中文、英文都可以）。
 

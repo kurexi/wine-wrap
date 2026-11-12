@@ -63,6 +63,10 @@ jobs:
           mkdir dist
           mv "$w/wine-winewrap-$VERSION-osx64.tar.xz" dist/
           mv "$w/downloads/crossover-sources-$CX.tar.gz" dist/
+          # GStreamer and the GLib, libffi, PCRE2 and libintl sources Meson
+          # downloaded for it (LGPL and permissive licences).
+          mv "$w/downloads"/gstreamer-*.tar.gz dist/
+          mv "$w"/src/gstreamer-*/subprojects/packagecache/* dist/
           cp scripts/wine-patches/*.patch scripts/wine-shims/macos-fixes.c dist/
           (cd dist && shasum -a 256 * > SHA256SUMS)
           cat dist/SHA256SUMS

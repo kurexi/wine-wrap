@@ -1,0 +1,106 @@
+winegstreamer: Decode video to system memory on macOS.
+
+Unreal Engine's video player (Electra) creates the H.264 decoder, gives it a
+Direct3D device manager when the decoder says it is D3D aware, and accepts
+only NV12 output. On macOS that fails twice:
+
+- CodeWeavers' source hides NV12 from the output types (CW HACK 26265), so
+  the player finds no type it can use.
+- With NV12 offered, ProcessOutput decodes a frame and then fails with
+  MF_E_UNEXPECTED copying it into the device's NV12 texture.
+
+Either way the video never starts. Phantom Blade Zero requests such videos
+right after a cutscene.
+
+So on macOS, don't advertise MF_SA_D3D_AWARE / MF_SA_D3D11_AWARE, refuse
+MFT_MESSAGE_SET_D3D_MANAGER with E_NOTIMPL, and offer NV12 as Windows does:
+callers then decode to NV12 in system memory. WINEWRAP_MF_D3D=1 brings back
+CodeWeavers' behaviour.
+
+Applies to the Wine tree in CodeWeavers' crossover-sources (26.3.0).
+
+--- a/dlls/winegstreamer/video_decoder.c
++++ b/dlls/winegstreamer/video_decoder.c
+@@ -436,6 +436,32 @@
+     }
+ 
+     return hr;
++}
++
++/* CW HACK 26265 */
++extern void CDECL wine_get_host_version( const char **sysname, const char **release );
++
++static BOOL is_macos(void)
++{
++    const char *sysname;
++
++    wine_get_host_version( &sysname, NULL );
++    return !strcmp( sysname, "Darwin" );
++}
++
++/* WineWrap: whether the decoder takes a Direct3D device manager and outputs
++ * samples backed by textures. On macOS, copying a decoded frame into such an
++ * NV12 texture fails (MF_E_UNEXPECTED from ProcessOutput), and the hack above
++ * that hides NV12 instead leaves Unreal Engine's video player, which accepts
++ * nothing else, without an output type. So there the decoder is not D3D aware
++ * and callers get NV12 in system memory, unless WINEWRAP_MF_D3D=1 asks for
++ * CodeWeavers' behaviour. */
++static BOOL d3d_aware(void)
++{
++    WCHAR value[2];
++
++    if (!is_macos()) return TRUE;
++    return GetEnvironmentVariableW( L"WINEWRAP_MF_D3D", value, ARRAY_SIZE(value) ) == 1 && value[0] == '1';
+ }
+ 
+ static HRESULT init_allocator(struct video_decoder *decoder)
+@@ -581,17 +607,6 @@
+     return MFCreateVideoMediaTypeFromSubtype(decoder->input_types[index], (IMFVideoMediaType **)type);
+ }
+ 
+-/* CW HACK 26265 */
+-extern void CDECL wine_get_host_version( const char **sysname, const char **release );
+-
+-static BOOL is_macos(void)
+-{
+-    const char *sysname;
+-
+-    wine_get_host_version( &sysname, NULL );
+-    return !strcmp( sysname, "Darwin" );
+-}
+-
+ static HRESULT WINAPI transform_GetOutputAvailableType(IMFTransform *iface, DWORD id,
+         DWORD index, IMFMediaType **type)
+ {
+@@ -606,7 +621,7 @@
+         return MF_E_NO_MORE_TYPES;
+ 
+     /* CW HACK 26265 */
+-    if (is_macos() && IsEqualGUID(decoder->output_types[index], &MFVideoFormat_NV12))
++    if (is_macos() && d3d_aware() && IsEqualGUID(decoder->output_types[index], &MFVideoFormat_NV12))
+     {
+         WARN("Skipping NV12 output format\n");
+         index++;
+@@ -863,6 +878,11 @@
+     switch (message)
+     {
+     case MFT_MESSAGE_SET_D3D_MANAGER:
++        if (param && !d3d_aware())
++        {
++            WARN("Not D3D aware, refusing the device manager.\n");
++            return E_NOTIMPL;
++        }
+         if (FAILED(hr = IMFVideoSampleAllocatorEx_SetDirectXManager(decoder->allocator, (IUnknown *)param)))
+             return hr;
+ 
+@@ -1673,8 +1693,8 @@
+     if (FAILED(hr = MFCreateAttributes(&decoder->attributes, 16)))
+         goto failed;
+     if (FAILED(hr = IMFAttributes_SetUINT32(decoder->attributes, &MF_LOW_LATENCY, FALSE))
+-            || FAILED(hr = IMFAttributes_SetUINT32(decoder->attributes, &MF_SA_D3D_AWARE, TRUE))
+-            || FAILED(hr = IMFAttributes_SetUINT32(decoder->attributes, &MF_SA_D3D11_AWARE, TRUE))
++            || FAILED(hr = IMFAttributes_SetUINT32(decoder->attributes, &MF_SA_D3D_AWARE, d3d_aware()))
++            || FAILED(hr = IMFAttributes_SetUINT32(decoder->attributes, &MF_SA_D3D11_AWARE, d3d_aware()))
+             || FAILED(hr = IMFAttributes_SetUINT32(decoder->attributes,
+                     &MFT_DECODER_EXPOSE_OUTPUT_TYPES_IN_NATIVE_ORDER, FALSE)))
+         goto failed;

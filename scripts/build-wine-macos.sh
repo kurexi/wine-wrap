@@ -17,8 +17,11 @@ JOBS="$(sysctl -n hw.ncpu)"
 CX_VERSION=26.3.0
 # WineWrap's build of it. Bump the revision whenever the build changes, so
 # Steam bottles move to the new one (see wine_builds.rs).
-VERSION="$CX_VERSION-5"
+VERSION="$CX_VERSION-6"
 GCC_VERSION=15.2.0
+GST_VERSION=1.28.9
+MESON_VERSION=1.11.2
+NINJA_VERSION=1.13.2
 DOWNLOADS=(
   "https://media.codeweavers.com/pub/crossover/source/crossover-sources-$CX_VERSION.tar.gz ac99c8ca4b3848f3e81784135f023df266b61c2345726ea55a50b3e030dd6872"
   "https://ftp.gnu.org/gnu/bison/bison-3.8.2.tar.xz 9bba0214ccf7f1079c5d59210045227bcf619519840ebfa80cd3849cff5a5bf2"
@@ -26,6 +29,11 @@ DOWNLOADS=(
   # Game controllers: Wine's winebus finds them through SDL.
   "https://github.com/libsdl-org/SDL/releases/download/release-2.32.10/SDL2-2.32.10.tar.gz 5f5993c530f084535c65a6879e9b26ad441169b3e25d789d83287040a9ca5165"
   "https://download.savannah.gnu.org/releases/freetype/freetype-2.13.3.tar.xz 0550350666d427c74daeb85d5ac7bb353acba5f76956395995311a9c6f063289"
+  # Video and audio decoding (H.264, AAC, MP3) for games' cutscenes: Wine's
+  # Media Foundation decoders are GStreamer pipelines. Meson and Ninja build it.
+  "https://gitlab.freedesktop.org/gstreamer/gstreamer/-/archive/$GST_VERSION/gstreamer-$GST_VERSION.tar.gz 0fdecabb02f170b78251f7b9f1b5092073f52e70ba06c92df53fe36745041db6"
+  "https://files.pythonhosted.org/packages/06/ce/c4d3d849d5cf8d9193b075acf435fb5dc0f4bdab35a3486f1204fd8265a7/meson-$MESON_VERSION.tar.gz 698feae069cef3ecd4d7aaf281d7df359bdfcf555a9a1564383d3b913fa8a736"
+  "https://github.com/ninja-build/ninja/archive/refs/tags/v$NINJA_VERSION.tar.gz 974d6b2f4eeefa25625d34da3cb36bdcebe7fbce40f4c16ac0835fd1c0cbae17"
   # MinGW GCC cross toolchain for Wine's Windows-side DLLs (see below).
   "https://ftp.gnu.org/gnu/binutils/binutils-2.45.tar.xz c50c0e7f9cb188980e2cc97e4537626b1672441815587f1eab69d2a1bfbef5d2"
   "https://ftp.gnu.org/gnu/gcc/gcc-$GCC_VERSION/gcc-$GCC_VERSION.tar.xz 438fd996826b0c82485a29da03a72d71d6e3541a83ec702df4271f6fe025d24e"
@@ -63,6 +71,8 @@ tar xzf "$DL/crossover-sources-$CX_VERSION.tar.gz" -C "$SRC" sources/wine source
 tar xzf "$DL/nettle-3.10.tar.gz" -C "$SRC"
 tar xJf "$DL/freetype-2.13.3.tar.xz" -C "$SRC"
 tar xzf "$DL/SDL2-2.32.10.tar.gz" -C "$SRC"
+tar xzf "$DL/gstreamer-$GST_VERSION.tar.gz" -C "$SRC"
+tar xzf "$DL/meson-$MESON_VERSION.tar.gz" -C "$SRC"
 [[ -d "$TOOLS/moltenvk" ]] || { mkdir -p "$TOOLS/moltenvk" && tar xf "$DL/MoltenVK-macos.tar" -C "$TOOLS/moltenvk"; }
 MVK="$TOOLS/moltenvk/MoltenVK/MoltenVK/dynamic/dylib/macOS"
 for p in "$ROOT"/scripts/wine-patches/*.patch; do
@@ -76,6 +86,14 @@ if [[ ! -x "$TOOLS/host/bin/bison" ]]; then
   tar xJf "$DL/bison-3.8.2.tar.xz" -C "$OBJ"
   (cd "$OBJ/bison-3.8.2" && ./configure --prefix="$TOOLS/host" >log 2>&1 &&
     make -j"$JOBS" >>log 2>&1 && make install >>log 2>&1)
+fi
+
+if [[ ! -x "$TOOLS/host/bin/ninja" ]]; then
+  log "Building ninja"
+  tar xzf "$DL/v$NINJA_VERSION.tar.gz" -C "$OBJ"
+  (cd "$OBJ/ninja-$NINJA_VERSION" && python3 configure.py --bootstrap >log 2>&1 &&
+    mkdir -p "$TOOLS/host/bin" && cp ninja "$TOOLS/host/bin/") ||
+    { tail -30 "$OBJ/ninja-$NINJA_VERSION/log"; exit 1; }
 fi
 
 # Wine's Windows-side DLLs are built with MinGW GCC, as in CrossOver's and
@@ -157,6 +175,30 @@ autotools freetype "$SRC/freetype-2.13.3" --without-png --without-harfbuzz \
   --without-brotli --without-bzip2 --with-zlib=yes
 autotools sdl2 "$SRC/SDL2-2.32.10"
 
+# GStreamer with only the plugins Wine's decoders need. Decoding is done by
+# macOS itself (the applemedia plugin: VideoToolbox for H.264, AudioToolbox
+# for AAC and MP3), so no FFmpeg. GLib, libffi, PCRE2 and libintl are Meson
+# subprojects of the GStreamer tree, downloaded by Meson with the checksums in
+# its wrap files. pkg-config and CMake are turned off so that nothing from
+# the machine (Homebrew, for the wrong architecture) is picked up.
+log "Building GStreamer"
+gst_on() { local sub=$1 f; shift; for f in "$@"; do printf -- '-D%s:%s=enabled\n' "$sub" "$f"; done; }
+(PKG_CONFIG=/usr/bin/false CMAKE=/usr/bin/false OBJCXX="$CXX" \
+  x86 python3 "$SRC/meson-$MESON_VERSION/meson.py" setup "$OBJ/gstreamer" "$SRC/gstreamer-$GST_VERSION" \
+    --prefix="$DEPS" --libdir=lib --buildtype=release -Dauto_features=disabled \
+    -Dbase=enabled -Dgood=enabled -Dbad=enabled -Dugly=disabled -Dtools=enabled \
+    -Dbuild-tools-source=system -Dextra-checks=disabled -Dglib:tests=false \
+    -Dgstreamer:check=enabled \
+    $(gst_on gst-plugins-base app audioconvert audioresample audiorate gl pbtypes playback \
+        rawparse typefind videoconvertscale videorate volume) \
+    -Dgst-plugins-base:gl_api=opengl -Dgst-plugins-base:gl_platform=cgl -Dgst-plugins-base:gl_winsys=cocoa \
+    $(gst_on gst-plugins-good apetag audioparsers avi deinterlace icydemux id3demux isomp4 \
+        matroska videofilter wavparse) \
+    $(gst_on gst-plugins-bad applemedia gl mpegtsdemux videoparsers) \
+    >"$OBJ/gstreamer.log" 2>&1 &&
+  ninja -C "$OBJ/gstreamer" install >>"$OBJ/gstreamer.log" 2>&1) ||
+  { tail -40 "$OBJ/gstreamer.log"; exit 1; }
+
 # Configure flags follow Gcenx's wine-stable Portfile, including SDL, through
 # which Wine finds game controllers. Wine 11's macOS OpenGL
 # needs EGL, so OpenGL is off (as in Gcenx's builds).
@@ -166,12 +208,14 @@ mkdir -p "$OBJ/wine"
   FREETYPE_CFLAGS="-I$DEPS/include/freetype2" FREETYPE_LIBS="-lfreetype" \
   GNUTLS_CFLAGS="-I$DEPS/include" GNUTLS_LIBS="-lgnutls" \
   SDL2_CFLAGS="-I$DEPS/include/SDL2" SDL2_LIBS="-lSDL2" \
+  GSTREAMER_CFLAGS="-I$DEPS/include/gstreamer-1.0 -I$DEPS/include/glib-2.0 -I$DEPS/lib/glib-2.0/include" \
+  GSTREAMER_LIBS="-lgstvideo-1.0 -lgstaudio-1.0 -lgsttag-1.0 -lgstbase-1.0 -lgstreamer-1.0 -lgobject-2.0 -lglib-2.0" \
   x86 "$SRC/sources/wine/configure" --prefix="$INSTALL" \
     --enable-archs=i386,x86_64 --with-mingw \
     --without-alsa --without-capi --with-coreaudio --with-cups --without-dbus \
     --without-ffmpeg --without-fontconfig --with-freetype --without-gettext \
     --without-gettextpo --without-gphoto --with-gnutls --without-gssapi \
-    --without-gstreamer --without-inotify --without-krb5 --without-netapi \
+    --with-gstreamer --without-inotify --without-krb5 --without-netapi \
     --with-opencl --without-opengl --without-oss --with-pcap --with-pthread \
     --without-pulse --without-sane --with-sdl --without-udev --with-unwind \
     --without-usb --without-v4l2 --with-vulkan --without-wayland --without-x \
@@ -205,6 +249,36 @@ for l in libgmp.10.dylib libnettle.8.dylib libhogweed.6.dylib libgnutls.30.dylib
 done
 cp "$MVK/libMoltenVK.dylib" "$P/lib/"
 
+# GStreamer: its libraries go to lib/, plugins to lib/gstreamer-1.0 and the
+# plugin scanner to libexec/gstreamer-1.0. That is the layout GStreamer looks
+# for relative to libgstreamer, so no environment variables are needed.
+bundle() { # file path-to-lib: point the file's $DEPS/lib libraries at lib/, copying them there
+  local f=$1 rel=$2 dep leaf
+  for dep in $(otool -L "$f" | awk 'NR>1{print $1}' | grep "^$DEPS/lib/[^/]*\$" || true); do
+    leaf="$(basename "$dep")"
+    install_name_tool -change "$dep" "$rel/$leaf" "$f"
+    if [[ ! -e "$P/lib/$leaf" ]]; then
+      cp -L "$dep" "$P/lib/$leaf"
+      chmod u+w "$P/lib/$leaf"
+      install_name_tool -id "@rpath/$leaf" "$P/lib/$leaf"
+      bundle "$P/lib/$leaf" @loader_path
+    fi
+  done
+}
+[[ -f "$P/lib/wine/x86_64-unix/winegstreamer.so" ]] || { echo "Wine was built without GStreamer"; exit 1; }
+bundle "$P/lib/wine/x86_64-unix/winegstreamer.so" @rpath
+mkdir -p "$P/lib/gstreamer-1.0" "$P/libexec/gstreamer-1.0"
+for f in "$DEPS"/lib/gstreamer-1.0/*.dylib; do
+  cp "$f" "$P/lib/gstreamer-1.0/"
+  f="$P/lib/gstreamer-1.0/$(basename "$f")"
+  chmod u+w "$f"
+  install_name_tool -id "@rpath/$(basename "$f")" "$f"
+  bundle "$f" @loader_path/..
+done
+cp "$DEPS/libexec/gstreamer-1.0/gst-plugin-scanner" "$P/libexec/gstreamer-1.0/"
+chmod u+w "$P/libexec/gstreamer-1.0/gst-plugin-scanner"
+bundle "$P/libexec/gstreamer-1.0/gst-plugin-scanner" @loader_path/../../lib
+
 # Fixes for macOS behaviour, loaded into every Wine process (see the source).
 # Also built for arm64, so that native programs started from Wine can load it.
 /usr/bin/clang -arch x86_64 -arch arm64 -O2 -dynamiclib \
@@ -219,7 +293,8 @@ tar xJf "$DL/wine-gecko-2.47.4-x86.tar.xz" -C "$P/share/wine/gecko"
 tar xJf "$DL/wine-gecko-2.47.4-x86_64.tar.xz" -C "$P/share/wine/gecko"
 
 # Rewriting load commands invalidates signatures; re-sign ad hoc.
-find "$P/lib" -maxdepth 1 -name '*.dylib' -exec codesign -f -s - {} \; 2>/dev/null
+find "$P/lib" -maxdepth 2 -name '*.dylib' -not -path '*/wine/*' -exec codesign -f -s - {} \; 2>/dev/null
+codesign -f -s - "$P/libexec/gstreamer-1.0/gst-plugin-scanner" 2>/dev/null
 find "$P/lib/wine/x86_64-unix" -name '*.so' -exec codesign -f -s - {} \; 2>/dev/null
 
 OUT="$W/wine-winewrap-$VERSION-osx64.tar.xz"

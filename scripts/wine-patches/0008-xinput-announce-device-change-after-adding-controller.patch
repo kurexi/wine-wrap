@@ -1,0 +1,62 @@
+xinput: Announce a device change once a reconnected controller is usable.
+
+Every process's XInput opens controllers itself, from its own device
+notification. A program that re-checks XInput when Windows announces a device
+change (WM_DEVICECHANGE) can do so before that: Phantom Blade Zero (Unreal
+Engine) polled all four slots 10 ms before XInput had re-added a reconnected
+controller, found none, and never polled again, so the controller stayed dead
+until the game was restarted. On Windows XInput is already up to date when the
+change is announced.
+
+After adding a controller (other than in the initial scan), post
+WM_DEVICECHANGE / DBT_DEVNODES_CHANGED to the process's own top-level windows,
+so such programs check again.
+
+Applies to the Wine tree in CodeWeavers' crossover-sources (26.3.0).
+
+--- a/dlls/xinput1_3/main.c
++++ b/dlls/xinput1_3/main.c
+@@ -452,7 +452,24 @@
+     if (defkey) RegCloseKey(defkey);
+     return disable;
+ }
++
++/* WineWrap: tell this process's windows that devices changed, once a
++ * controller is usable here. Programs re-check XInput when Windows announces a
++ * device change and may then stop polling (Unreal Engine does). On Windows
++ * XInput is up to date by then; here each process opens the controller itself,
++ * after its own notification, which can come after the program's check. The
++ * controller then stays dead in that program after a reconnect. */
++static BOOL CALLBACK notify_window_proc(HWND hwnd, LPARAM lparam)
++{
++    DWORD pid;
+ 
++    if (GetWindowThreadProcessId(hwnd, &pid) && pid == GetCurrentProcessId())
++        PostMessageW(hwnd, WM_DEVICECHANGE, DBT_DEVNODES_CHANGED, 0);
++    return TRUE;
++}
++
++static BOOL initial_scan_done;
++
+ static BOOL try_add_device(const WCHAR *device_path)
+ {
+     SP_DEVICE_INTERFACE_DATA iface = {sizeof(iface)};
+@@ -484,7 +501,10 @@
+     else if (!controller_init(&controllers[i], preparsed, &caps, device, device_path))
+         WARN("ignoring HID device, failed to initialize\n");
+     else
++    {
++        if (initial_scan_done) EnumWindows(notify_window_proc, 0);
+         return TRUE;
++    }
+ 
+     CloseHandle(device);
+     HidD_FreePreparsedData(preparsed);
+@@ -706,6 +726,7 @@
+     notif = RegisterDeviceNotificationW(hwnd, &filter, DEVICE_NOTIFY_WINDOW_HANDLE);
+ 
+     update_controller_list();
++    initial_scan_done = TRUE;
+     SetEvent(start_event);
+ 
+     do

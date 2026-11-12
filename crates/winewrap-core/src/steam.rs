@@ -399,6 +399,7 @@ mod tests {
         assert!(with(Some("wine-winewrap-26.3.0-2")));
         assert!(with(Some("wine-winewrap-26.3.0-3")));
         assert!(with(Some("wine-winewrap-26.3.0-4")));
+        assert!(with(Some("wine-winewrap-26.3.0-5")));
         assert!(!with(Some(&wine_builds::winewrap_build().runtime_name())));
         assert!(!with(Some("gptk")));
         assert!(!with(Some("my-wine")));
