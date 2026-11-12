@@ -182,9 +182,16 @@ autotools sdl2 "$SRC/SDL2-2.32.10"
 # its wrap files. pkg-config and CMake are turned off so that nothing from
 # the machine (Homebrew, for the wrong architecture) is picked up.
 log "Building GStreamer"
+# Meson takes the target CPU from the Python running it, so that must be an
+# x86_64 process: Apple's universal /usr/bin/python3 under Rosetta. A python3
+# from PATH can be arm64-only (as on GitHub's runners), and libffi is then
+# configured for arm64.
+PY=/usr/bin/python3
+[[ "$(x86 "$PY" -c 'import platform; print(platform.machine())')" == x86_64 ]] ||
+  { echo "$PY doesn't run as x86_64"; exit 1; }
 gst_on() { local sub=$1 f; shift; for f in "$@"; do printf -- '-D%s:%s=enabled\n' "$sub" "$f"; done; }
 (PKG_CONFIG=/usr/bin/false CMAKE=/usr/bin/false OBJCXX="$CXX" \
-  x86 python3 "$SRC/meson-$MESON_VERSION/meson.py" setup "$OBJ/gstreamer" "$SRC/gstreamer-$GST_VERSION" \
+  x86 "$PY" "$SRC/meson-$MESON_VERSION/meson.py" setup "$OBJ/gstreamer" "$SRC/gstreamer-$GST_VERSION" \
     --prefix="$DEPS" --libdir=lib --buildtype=release -Dauto_features=disabled \
     -Dbase=enabled -Dgood=enabled -Dbad=enabled -Dugly=disabled -Dtools=enabled \
     -Dbuild-tools-source=system -Dextra-checks=disabled -Dglib:tests=false \
